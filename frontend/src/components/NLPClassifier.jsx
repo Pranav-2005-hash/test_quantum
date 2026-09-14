@@ -3,6 +3,7 @@ import { Upload, FileText, CheckCircle2, AlertTriangle, ShieldAlert, FileUp, Fil
 import { motion } from 'framer-motion';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
+import Tesseract from 'tesseract.js';
 
 if (typeof window !== 'undefined' && 'Worker' in window) {
   pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
@@ -50,6 +51,7 @@ export default function NLPClassifier({ documentText, setDocumentText, classific
   const [isScanning, setIsScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState(0);
   const [isExtractingFile, setIsExtractingFile] = useState(false);
+  const [ocrProgressText, setOcrProgressText] = useState('');
   const [showDetails, setShowDetails] = useState(false);
   const fileInputRef = useRef(null);
 
@@ -58,6 +60,7 @@ export default function NLPClassifier({ documentText, setDocumentText, classific
     if (!file) return;
 
     setIsExtractingFile(true);
+    setOcrProgressText('Reading Document Data...');
     try {
       // 1. Read Raw File as Base64 for real document transmission
       const reader = new FileReader();
@@ -69,9 +72,12 @@ export default function NLPClassifier({ documentText, setDocumentText, classific
 
       let extractedText = '';
 
+      const isImage = file.type.startsWith('image/') || file.name.match(/\.(jpg|jpeg|png|bmp|webp)$/i);
+
       if (file.type === 'text/plain' || file.name.endsWith('.txt') || file.name.endsWith('.csv')) {
         extractedText = await file.text();
       } else if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
+        setOcrProgressText('Extracting PDF text content...');
         const arrayBuffer = await file.arrayBuffer();
         const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) });
         const pdf = await loadingTask.promise;
@@ -84,6 +90,30 @@ export default function NLPClassifier({ documentText, setDocumentText, classific
           fullText += pageText + '\n\n';
         }
         extractedText = fullText.trim();
+      } else if (isImage) {
+        setOcrProgressText('Initializing Neural Network OCR Engine...');
+        try {
+          const result = await Tesseract.recognize(
+            file,
+            'eng',
+            {
+              logger: (m) => {
+                if (m.status === 'recognizing text') {
+                  setOcrProgressText(`Running OCR Scan... (${Math.round((m.progress || 0) * 100)}%)`);
+                } else if (m.status) {
+                  setOcrProgressText(`OCR Engine: ${m.status}...`);
+                }
+              }
+            }
+          );
+          extractedText = result?.data?.text ? result.data.text.trim() : '';
+        } catch (ocrErr) {
+          console.error("Tesseract OCR extraction failed:", ocrErr);
+        }
+
+        if (!extractedText) {
+          extractedText = `Document File: ${file.name}\nType: ${file.type || 'Image Document'}\nSize: ${(file.size / 1024).toFixed(1)} KB`;
+        }
       } else {
         extractedText = `Document File: ${file.name}\nType: ${file.type || 'Binary Document'}\nSize: ${(file.size / 1024).toFixed(1)} KB`;
       }
@@ -103,6 +133,7 @@ export default function NLPClassifier({ documentText, setDocumentText, classific
       alert("Failed to read the document file.");
     } finally {
       setIsExtractingFile(false);
+      setOcrProgressText('');
       e.target.value = null;
     }
   };
@@ -291,7 +322,7 @@ export default function NLPClassifier({ documentText, setDocumentText, classific
             {isExtractingFile && (
               <div className="absolute inset-0 bg-[#0a0f1e]/90 flex flex-col items-center justify-center rounded-xl z-10 backdrop-blur-sm">
                  <RefreshCw className="w-8 h-8 text-orange-400 animate-spin mb-2" />
-                 <div className="font-mono text-orange-400 text-sm font-bold">Extracting & Packaging Document File...</div>
+                 <div className="font-mono text-orange-400 text-sm font-bold animate-pulse">{ocrProgressText || "Extracting & Packaging Document File..."}</div>
               </div>
             )}
             
