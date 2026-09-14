@@ -2,16 +2,40 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { runOsintScan } = require('./controllers/osintController');
+const { getSystemBattery } = require('./controllers/systemController');
+const { 
+    getNetworkInfo, 
+    transmitPackage, 
+    getInbox, 
+    acknowledgePackage, 
+    clearInbox 
+} = require('./controllers/lanController');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const HOST = '0.0.0.0';
 
 app.use(cors());
-app.use(express.json());
+// Increased body parser limit to 100MB for large 600KB+ PDF/DOCX document transmissions
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
-// Routes
+// System Battery Telemetry Route
+app.get('/api/system/battery', getSystemBattery);
+
+// OSINT Scan Route
 app.get('/api/osint/scan', runOsintScan);
 
-app.listen(PORT, () => {
-    console.log(`QuantumShield Backend running on http://localhost:${PORT}`);
+// LAN Dual-Node Routes
+app.get('/api/network-info', getNetworkInfo);
+app.post('/api/transmit', transmitPackage);
+app.get('/api/inbox', getInbox);
+app.post('/api/inbox/:id/ack', acknowledgePackage);
+app.delete('/api/inbox/clear', clearInbox);
+
+app.listen(PORT, HOST, () => {
+    console.log(`=================================================`);
+    console.log(`🛡️  QuantumShield PQC LAN Server active`);
+    console.log(`📡 Listening on 0.0.0.0:${PORT} (LAN reachable)`);
+    console.log(`=================================================`);
 });

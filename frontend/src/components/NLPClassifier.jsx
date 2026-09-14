@@ -1,10 +1,9 @@
 import React, { useState, useRef } from 'react';
-import { Upload, FileText, CheckCircle2, AlertTriangle, ShieldAlert, FileUp } from 'lucide-react';
+import { Upload, FileText, CheckCircle2, AlertTriangle, ShieldAlert, FileUp, File, Image as ImageIcon, Table, RefreshCw } from 'lucide-react';
 import { motion } from 'framer-motion';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
 
-// Use Vite's asset URL import to guarantee local worker loads with correct MIME type
 if (typeof window !== 'undefined' && 'Worker' in window) {
   pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 }
@@ -30,12 +29,24 @@ const PUBLIC_KEYWORDS = [
 ];
 
 const SAMPLES = {
-  PII: "Patient Registration Form\nName: John Doe\nDate of Birth: 05/12/1985\nSSN: 000-00-0000\nAddress: 123 Fake St, Springfield\nPhone Number: 555-0198",
-  FINANCIAL: "Q3 Earnings Report\nTotal Revenue: $1,450,000\nNet Profit: $320,000\nPlease wire the payment to Account Number: 8493-2938-11\nInvoice #9923 attached for review.",
-  PUBLIC: "Company Announcement\nWe are excited to announce our new product launch coming next month. Stay tuned for more updates on our website and social media channels! No sensitive data here."
+  PII: {
+    name: 'passport_scan_john_doe.pdf',
+    type: 'application/pdf',
+    text: "UNITED STATES OF AMERICA PASSPORT\nSurname: DOE\nGiven Name: JOHN\nNationality: USA\nDate of Birth: 05 MAY 1985\nPassport No: A98234918\nSSN: 000-00-0000\nIssue Date: 12 JAN 2020\nAuthority: US DEPT OF STATE"
+  },
+  FINANCIAL: {
+    name: 'q3_financial_payroll_statement.pdf',
+    type: 'application/pdf',
+    text: "CONFIDENTIAL PAYROLL & FINANCIAL STATEMENT Q3 2025\nCompany Name: QuantumTech Corp\nGross Revenue: $4,500,000\nNet Executive Salaries:\n1. John Smith - Basic Salary: $185,000 | Tax Deduction: $42,000 | Account No: 9482-2938-11\n2. Sarah Jenkins - Basic Salary: $192,000 | Tax Deduction: $45,000 | Account No: 8839-1102-44\nBank Swift Code: CHASUS33\nPlease wire dividend distribution directly to the account provided."
+  },
+  PUBLIC: {
+    name: 'quantumshield_public_announcement.pdf',
+    type: 'application/pdf',
+    text: "PUBLIC ANNOUNCEMENT & TECHNICAL WHITEPAPER\nWe are proud to introduce QuantumShield — an AI-powered post-quantum security orchestration framework designed to protect global cloud infrastructure against harvest-now-decrypt-later threat models.\nThis document is open source and intended for public domain research."
+  }
 };
 
-export default function NLPClassifier({ documentText, setDocumentText, classification, setClassification }) {
+export default function NLPClassifier({ documentText, setDocumentText, classification, setClassification, fileMeta, setFileMeta }) {
   const [isScanning, setIsScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState(0);
   const [isExtractingFile, setIsExtractingFile] = useState(false);
@@ -48,13 +59,20 @@ export default function NLPClassifier({ documentText, setDocumentText, classific
 
     setIsExtractingFile(true);
     try {
-      if (file.type === 'text/plain') {
-        const text = await file.text();
-        setDocumentText(text);
-      } else if (file.type === 'application/pdf') {
+      // 1. Read Raw File as Base64 for real document transmission
+      const reader = new FileReader();
+      const base64Promise = new Promise((resolve) => {
+        reader.onload = (evt) => resolve(evt.target.result);
+        reader.readAsDataURL(file);
+      });
+      const fileBase64 = await base64Promise;
+
+      let extractedText = '';
+
+      if (file.type === 'text/plain' || file.name.endsWith('.txt') || file.name.endsWith('.csv')) {
+        extractedText = await file.text();
+      } else if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
         const arrayBuffer = await file.arrayBuffer();
-        
-        // Pass data as an object to getDocument
         const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) });
         const pdf = await loadingTask.promise;
         
@@ -65,18 +83,44 @@ export default function NLPClassifier({ documentText, setDocumentText, classific
           const pageText = textContent.items.map(item => item.str).join(' ');
           fullText += pageText + '\n\n';
         }
-        setDocumentText(fullText.trim());
+        extractedText = fullText.trim();
       } else {
-        alert("Unsupported file type. Please upload a .txt or .pdf file.");
+        extractedText = `Document File: ${file.name}\nType: ${file.type || 'Binary Document'}\nSize: ${(file.size / 1024).toFixed(1)} KB`;
       }
+
+      setDocumentText(extractedText);
+      if (setFileMeta) {
+        setFileMeta({
+          name: file.name,
+          type: file.type || 'application/octet-stream',
+          size: file.size,
+          base64: fileBase64
+        });
+      }
+
     } catch (err) {
-      console.error("Error reading file:", err);
-      alert("Failed to read the file. See console for details.");
+      console.error("Error reading document file:", err);
+      alert("Failed to read the document file.");
     } finally {
       setIsExtractingFile(false);
-      // Reset input so the same file could be selected again if needed
       e.target.value = null;
     }
+  };
+
+  const loadSample = (type) => {
+    const sample = SAMPLES[type];
+    setDocumentText(sample.text);
+    if (setFileMeta) {
+      const encoded = btoa(unescape(encodeURIComponent(sample.text)));
+      setFileMeta({
+        name: sample.name,
+        type: 'text/plain',
+        size: sample.text.length,
+        base64: `data:text/plain;base64,${encoded}`
+      });
+    }
+    setClassification(null);
+    setShowDetails(false);
   };
 
   const simulateClassification = () => {
@@ -88,7 +132,6 @@ export default function NLPClassifier({ documentText, setDocumentText, classific
 
     const textLower = documentText.toLowerCase();
     
-    // Simulate thinking/scanning
     let progress = 0;
     const interval = setInterval(() => {
       progress += 10;
@@ -96,10 +139,8 @@ export default function NLPClassifier({ documentText, setDocumentText, classific
       if (progress >= 100) {
         clearInterval(interval);
         
-        // --- NEW WEIGHTED SCORING ALGORITHM ---
         const getMatches = (keywords) => keywords.filter(k => {
             const escaped = k.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            // Safe word boundary to avoid substring matching (e.g. 'age' inside 'page')
             const regex = new RegExp(`(^|\\W)(${escaped})($|\\W)`, 'i');
             return regex.test(textLower);
         });
@@ -125,16 +166,10 @@ export default function NLPClassifier({ documentText, setDocumentText, classific
         if (piiScore === 0 && finScore === 0 && pubScore === 0) {
           winner = 'PUBLIC';
         } else {
-          // Find the maximum score accurately across all three
           const maxScore = Math.max(piiScore, finScore, pubScore);
-          
-          if (maxScore === piiScore) {
-            winner = 'PII'; // PII wins ties for safety
-          } else if (maxScore === finScore) {
-            winner = 'FINANCIAL'; 
-          } else {
-            winner = 'PUBLIC';
-          }
+          if (maxScore === piiScore) winner = 'PII';
+          else if (maxScore === finScore) winner = 'FINANCIAL';
+          else winner = 'PUBLIC';
         }
 
         const winnerScore = categories[winner].score;
@@ -147,15 +182,13 @@ export default function NLPClassifier({ documentText, setDocumentText, classific
 
         let confidence = 98;
         if (winnerScore > 0 && secondHighestScore > 0) {
-             // Calculate actual dynamic confidence based on point spread
              confidence = (winnerScore / (winnerScore + secondHighestScore)) * 100;
         } else if (winnerScore === 0) {
-             confidence = 99; // Defaults to public safely
+             confidence = 99;
         } else if (winnerScore > 0 && secondHighestScore === 0) {
-             confidence = 98; // High confidence if zero competing scores
+             confidence = 98;
         }
         
-        // Allow confidence to drop to 50% for close ties, instead of capping at 82%
         confidence = Math.floor(Math.max(50, Math.min(99, confidence)));
 
         const formatReasoning = () => {
@@ -190,58 +223,42 @@ export default function NLPClassifier({ documentText, setDocumentText, classific
     }
   };
 
-  const renderHighlightedText = () => {
-    if (!classification) return <p className="whitespace-pre-wrap">{documentText}</p>;
-    
-    // Sort matches by length descending so longer phrases get replaced first
-    const processMatches = (matches) => [...matches].sort((a, b) => b.length - a.length);
-    
-    let highlightedHTML = documentText;
-
-    // Secondary matches (lighter shade)
-    processMatches(classification.otherMatches).forEach(match => {
-        const regex = new RegExp(`(${match.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
-        highlightedHTML = highlightedHTML.replace(regex, `<mark class="bg-gray-400/30 text-gray-300 px-1 rounded border border-gray-600/50" title="Detected context ($1)">$1</mark>`);
-    });
-
-    // Primary matches (accent color)
-    const highlightColor = classification.label === 'PII' ? 'bg-red-500/30 text-red-200 border border-red-500/50' 
-        : classification.label === 'FINANCIAL' ? 'bg-orange-500/30 text-orange-200 border border-orange-500/50' 
-        : 'bg-green-500/30 text-green-200 border border-green-500/50';
-
-    processMatches(classification.winningMatches).forEach(match => {
-      const regex = new RegExp(`(${match.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
-      highlightedHTML = highlightedHTML.replace(regex, `<mark class="${highlightColor} px-1 rounded font-bold shadow-[0_0_8px_currentColor]">$1</mark>`);
-    });
-
-    return (
-        <div className="flex flex-col h-full">
-           <div className="whitespace-pre-wrap leading-relaxed flex-1" dangerouslySetInnerHTML={{ __html: highlightedHTML }} />
-           
-           {classification.otherMatches.length > 0 && (
-             <div className="mt-4 pt-3 border-t border-gray-800 text-gray-400 text-xs italic">
-               Also detected (lower score): {classification.otherMatches.join(', ')} &rarr; did not override {classification.label} classification.
-             </div>
-           )}
-        </div>
-    );
-  };
-
   return (
     <div className="glass-card rounded-2xl p-6 md:p-10 border border-gray-800">
       <div className="flex items-center gap-3 mb-8">
         <FileText className="w-8 h-8 text-[#00e5ff]" />
-        <h2 className="text-3xl font-bold">Document Ingestion & NLP Classifier</h2>
+        <div>
+          <h2 className="text-3xl font-bold">Document Ingestion & NLP Classifier</h2>
+          <p className="text-xs text-gray-400 mt-1">Supports PDF, DOCX, TXT, CSV and Scanned Document Objects</p>
+        </div>
       </div>
 
       <div className="grid md:grid-cols-2 gap-8">
         {/* LEFT PANEL */}
         <div className="space-y-6">
           <div className="flex flex-wrap gap-2 items-center">
-            <button onClick={() => { setDocumentText(SAMPLES.PII); setClassification(null); setShowDetails(false); }} className="text-xs px-3 py-1.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors border border-gray-700">Load PII Sample</button>
-            <button onClick={() => { setDocumentText(SAMPLES.FINANCIAL); setClassification(null); setShowDetails(false); }} className="text-xs px-3 py-1.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors border border-gray-700">Load Financial Sample</button>
-            <button onClick={() => { setDocumentText(SAMPLES.PUBLIC); setClassification(null); setShowDetails(false); }} className="text-xs px-3 py-1.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors border border-gray-700">Load Public Sample</button>
+            <button onClick={() => loadSample('PII')} className="text-xs px-3 py-1.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors border border-gray-700 flex items-center gap-1.5 font-mono">
+              📄 Load PDF Passport Sample
+            </button>
+            <button onClick={() => loadSample('FINANCIAL')} className="text-xs px-3 py-1.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors border border-gray-700 flex items-center gap-1.5 font-mono">
+              📊 Load PDF Financial Statement
+            </button>
+            <button onClick={() => loadSample('PUBLIC')} className="text-xs px-3 py-1.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors border border-gray-700 flex items-center gap-1.5 font-mono">
+              🌐 Load Public PDF Sample
+            </button>
           </div>
+
+          {/* ACTIVE UPLOADED DOCUMENT CARD */}
+          {fileMeta?.name && (
+            <div className="p-3 bg-[#00e5ff]/10 rounded-xl border border-[#00e5ff]/40 flex items-center justify-between font-mono text-xs text-[#00e5ff]">
+              <div className="flex items-center gap-2 truncate">
+                <File className="w-4 h-4 text-[#00e5ff]" />
+                <span className="font-bold truncate">{fileMeta.name}</span>
+                <span className="text-gray-400">({(fileMeta.size / 1024).toFixed(1)} KB)</span>
+              </div>
+              <span className="px-2 py-0.5 bg-[#00e5ff]/20 rounded text-[10px] uppercase font-bold">Ready to Encrypt</span>
+            </div>
+          )}
 
           <div className="relative group">
             <textarea 
@@ -256,29 +273,31 @@ export default function NLPClassifier({ documentText, setDocumentText, classific
               type="file" 
               ref={fileInputRef} 
               onChange={handleFileUpload} 
-              accept=".txt,.pdf" 
+              accept=".txt,.pdf,.csv,.docx,.doc,.png,.jpg" 
               className="hidden" 
             />
 
             {!documentText && (
               <div 
                 onClick={() => fileInputRef.current?.click()}
-                className="absolute inset-0 flex flex-col items-center justify-center cursor-pointer pointer-events-auto opacity-40 hover:opacity-100 bg-gray-900/50 hover:bg-gray-800/80 rounded-xl transition-all border-2 border-dashed border-transparent hover:border-[#00e5ff]"
+                className="absolute inset-0 flex flex-col items-center justify-center cursor-pointer pointer-events-auto opacity-60 hover:opacity-100 bg-gray-900/80 hover:bg-gray-800/90 rounded-xl transition-all border-2 border-dashed border-[#00e5ff]/50 hover:border-[#00e5ff]"
               >
-                <FileUp className="w-10 h-10 mb-2 text-[#00e5ff]" />
-                <span className="text-[#00e5ff] font-bold">Upload PDF or TXT</span>
+                <FileUp className="w-12 h-12 mb-3 text-[#00e5ff] animate-bounce" />
+                <span className="text-[#00e5ff] font-bold text-base">Upload Document File</span>
+                <span className="text-xs text-gray-400 mt-1">Supports .pdf, .txt, .docx, .csv, .png</span>
               </div>
             )}
 
             {isExtractingFile && (
-              <div className="absolute inset-0 bg-[#0a0f1e]/80 flex flex-col items-center justify-center rounded-xl z-10 backdrop-blur-sm">
-                 <div className="font-mono text-orange-400 text-sm animate-pulse">Extracting text from file...</div>
+              <div className="absolute inset-0 bg-[#0a0f1e]/90 flex flex-col items-center justify-center rounded-xl z-10 backdrop-blur-sm">
+                 <RefreshCw className="w-8 h-8 text-orange-400 animate-spin mb-2" />
+                 <div className="font-mono text-orange-400 text-sm font-bold">Extracting & Packaging Document File...</div>
               </div>
             )}
             
             {isScanning && (
-              <div className="absolute inset-0 bg-[#0a0f1e]/80 flex flex-col items-center justify-center rounded-xl z-10 backdrop-blur-sm">
-                <div className="w-3/4 h-1 bg-gray-800 rounded-full overflow-hidden mb-4">
+              <div className="absolute inset-0 bg-[#0a0f1e]/90 flex flex-col items-center justify-center rounded-xl z-10 backdrop-blur-sm">
+                <div className="w-3/4 h-1.5 bg-gray-800 rounded-full overflow-hidden mb-4">
                   <motion.div 
                     className="h-full bg-[#00e5ff]"
                     initial={{ width: 0 }}
@@ -286,7 +305,7 @@ export default function NLPClassifier({ documentText, setDocumentText, classific
                     transition={{ duration: 0.1 }}
                   />
                 </div>
-                <div className="font-mono text-[#00e5ff] text-sm animate-pulse">Scanning document text...</div>
+                <div className="font-mono text-[#00e5ff] text-sm font-bold animate-pulse">Running NLP Keyword & Sensitivity Scanner...</div>
               </div>
             )}
           </div>
@@ -301,10 +320,10 @@ export default function NLPClassifier({ documentText, setDocumentText, classific
             </button>
             {documentText && (
               <button 
-                onClick={() => { setDocumentText(''); setClassification(null); setShowDetails(false); }} 
+                onClick={() => { setDocumentText(''); setClassification(null); setShowDetails(false); if (setFileMeta) setFileMeta(null); }} 
                 className="px-6 py-4 rounded-xl bg-red-900/20 text-red-400 border border-red-900/50 font-bold text-lg hover:bg-red-900/40 transition-all flex items-center justify-center whitespace-nowrap"
               >
-                Clear Text
+                Clear File
               </button>
             )}
           </div>
@@ -318,8 +337,9 @@ export default function NLPClassifier({ documentText, setDocumentText, classific
           </h3>
 
           {!classification && !isScanning && (
-            <div className="flex-1 flex items-center justify-center text-gray-600 font-mono text-sm text-center">
-              Awaiting document input.<br/>Click "Classify Document" to analyze.
+            <div className="flex-1 flex flex-col items-center justify-center text-gray-600 font-mono text-sm text-center gap-2">
+              <FileText className="w-10 h-10 text-gray-700" />
+              <span>Awaiting document upload or input.<br/>Click "Classify Document" to analyze.</span>
             </div>
           )}
 
@@ -340,38 +360,28 @@ export default function NLPClassifier({ documentText, setDocumentText, classific
                   </div>
                 </div>
                 <div className="text-right">
-                  <p className="text-sm text-gray-400 mb-1">Confidence</p>
+                  <p className="text-sm text-gray-400 mb-1">Confidence Score</p>
                   <div className="text-2xl font-mono font-bold text-white tracking-widest">{classification.confidence}%</div>
                 </div>
               </div>
 
               <div className="p-4 bg-black/40 rounded-lg border border-gray-800 font-mono text-sm text-gray-300">
-                <span className="text-gray-500">&gt; NLP Analysis Output</span>
+                <span className="text-gray-500">&gt; NLP Analysis Reasoning</span>
                 <br/>
                 <span className="text-[#39ff14]">{classification.reasoning}</span>
               </div>
 
-              <div className="flex justify-center pt-2 pb-4 border-t border-gray-800/50">
-                <button 
-                  onClick={() => setShowDetails(!showDetails)}
-                  className="w-full py-3 rounded-xl bg-gray-800/80 hover:bg-gray-700 text-[#00e5ff] transition-all border border-gray-700/80 uppercase tracking-widest font-bold text-sm shadow-lg shadow-black/20"
-                >
-                  {showDetails ? '▲ Hide Detailed Context' : '▼ View Detailed Classification Context'}
-                </button>
+              <div className="p-4 bg-[#0a0f1e] rounded-lg border border-gray-800 font-mono text-xs space-y-2">
+                <div className="text-gray-400 font-bold border-b border-gray-800 pb-1 uppercase">Detected Document Sensitive Keywords</div>
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {classification.winningMatches?.map((kw, i) => (
+                    <span key={i} className="px-2 py-0.5 rounded bg-red-500/20 text-red-300 border border-red-500/40 text-[11px] font-bold">
+                      {kw}
+                    </span>
+                  ))}
+                  {classification.winningMatches?.length === 0 && <span className="text-gray-500 italic">No high-risk keywords found</span>}
+                </div>
               </div>
-
-              {showDetails && (
-                <motion.div 
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  className="flex-1 overflow-y-auto pr-2 custom-scrollbar"
-                >
-                  <p className="text-xs text-gray-500 mb-2 uppercase tracking-wide">Document Context (Matches Highlighted)</p>
-                  <div className="p-4 bg-[#0a0f1e] rounded-lg border border-gray-800 font-mono text-xs text-gray-400 leading-relaxed">
-                    {renderHighlightedText()}
-                  </div>
-                </motion.div>
-              )}
             </motion.div>
           )}
         </div>

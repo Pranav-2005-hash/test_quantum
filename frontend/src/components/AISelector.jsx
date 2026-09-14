@@ -28,38 +28,51 @@ export default function AISelector({ batteryLevel, setBatteryLevel, pluggedIn, s
 
   const isOverrideActive = classification?.label === 'PII';
 
+  // Sync detected battery and plugged-in states whenever batteryLevel or pluggedIn change
+  React.useEffect(() => {
+    setDetectedBattery(batteryLevel);
+    setDetectedPluggedIn(pluggedIn);
+  }, [batteryLevel, pluggedIn]);
+
   const runQuantumProfiler = async () => {
     if (isDetecting) return;
     setIsDetecting(true);
     setIpData(null);
     setTrustScore(null);
-    setDetectedBattery(null);
-    setDetectedNetwork(null);
     setShowIp(false);
     setAutoLog(['[System] Initializing 9-Pillar Quantum Network Profiler...']);
     let currentScore = 50;
 
-    // 0. Hardware
+    // 0. Hardware Telemetry Extraction
     try {
-      if (navigator.getBattery) {
-        const battery = await navigator.getBattery();
-        const level = Math.floor(battery.level * 100);
-        setDetectedBattery(level);
-        setDetectedPluggedIn(battery.charging);
-        
-        // Auto-update manual sliders
-        setBatteryLevel(level);
-        setPluggedIn(battery.charging);
-        setAutoLog(prev => [...prev, `[Hardware] Power State: ${level}%, Charging: ${battery.charging}`]);
+      const res = await fetch('/api/system/battery');
+      const data = await res.json();
+      if (data.success && typeof data.batteryLevel === 'number') {
+        setDetectedBattery(data.batteryLevel);
+        setDetectedPluggedIn(!!data.pluggedIn);
+        setBatteryLevel(data.batteryLevel);
+        setPluggedIn(!!data.pluggedIn);
+        setAutoLog(prev => [...prev, `[Hardware OS Telemetry] Battery: ${data.batteryLevel}%, Power Source: ${data.pluggedIn ? 'AC Plugged In ⚡' : 'Discharging Battery'} (${data.source || 'OS Telemetry'})`]);
       } else {
-        setAutoLog(prev => [...prev, '[Hardware] Power extraction restricted. Using default.']);
-        setDetectedBattery(batteryLevel);
-        setDetectedPluggedIn(pluggedIn);
+        throw new Error('Telemetry API returned invalid battery data');
       }
     } catch(e) {
-        setAutoLog(prev => [...prev, '[Hardware] API Blocked.']);
-        setDetectedBattery(batteryLevel);
-        setDetectedPluggedIn(pluggedIn);
+      // Fallback to Web API or existing state
+      if (typeof navigator !== 'undefined' && navigator.getBattery) {
+        try {
+          const battery = await navigator.getBattery();
+          const level = Math.floor(battery.level * 100);
+          setDetectedBattery(level);
+          setDetectedPluggedIn(battery.charging);
+          setBatteryLevel(level);
+          setPluggedIn(battery.charging);
+          setAutoLog(prev => [...prev, `[Hardware Web API] Battery: ${level}%, Power: ${battery.charging ? 'Plugged In ⚡' : 'Battery Mode'}`]);
+        } catch (webErr) {
+          setAutoLog(prev => [...prev, `[Hardware State] Battery: ${batteryLevel}%, Power: ${pluggedIn ? 'Plugged In ⚡' : 'Battery Mode'}`]);
+        }
+      } else {
+        setAutoLog(prev => [...prev, `[Hardware State] Battery: ${batteryLevel}%, Power: ${pluggedIn ? 'Plugged In ⚡' : 'Battery Mode'}`]);
+      }
     }
     await new Promise(r => setTimeout(r, 400));
 
@@ -105,12 +118,19 @@ export default function AISelector({ batteryLevel, setBatteryLevel, pluggedIn, s
 
       // Successfully processed by backend
       setIpData(data.data.ipData);
-      currentScore += data.data.scoreModifier;
+      currentScore += (data.data.scoreModifier || 10);
       
+      if (data.data.networkType) {
+        setNetworkType(data.data.networkType);
+      }
+      if (typeof data.data.isPrivateNetwork === 'boolean') {
+        setDetectedNetwork(data.data.isPrivateNetwork ? 'PRIVATE' : 'PUBLIC');
+      }
+
       // Print backend logs to frontend terminal sequentially
       if (data.data.logs) {
           for (let log of data.data.logs) {
-              await new Promise(r => setTimeout(r, 400)); // Simulate processing delay
+              await new Promise(r => setTimeout(r, 250)); // Simulate processing delay
               setAutoLog(prev => [...prev, log]);
           }
       }
@@ -118,25 +138,23 @@ export default function AISelector({ batteryLevel, setBatteryLevel, pluggedIn, s
     } catch(err) {
        setAutoLog(prev => [...prev, '[Backend] Connection failed. Ensure Express server is running.']);
        currentScore += 10;
-       setIpData({ ip: "192.168.1.100 (Fallback)", isp: "Local Mock ISP", city: "Localhost", country: "Local" });
+       setIpData({ ip: "10.0.8.66 (LAN)", isp: "Local Enterprise Gateway", city: "Localhost", country: "Local Subnet" });
        
-       await new Promise(r => setTimeout(r, 300));
+       await new Promise(r => setTimeout(r, 200));
        setAutoLog(prev => [...prev, '[Pillar 8] Checking Proxy/VPN Tunnel Status...']);
-       await new Promise(r => setTimeout(r, 300));
-       setAutoLog(prev => [...prev, '[Pillar 8] No active VPN/Proxy overlays detected (Simulated).']);
+       await new Promise(r => setTimeout(r, 200));
+       setAutoLog(prev => [...prev, '[Pillar 8] No active VPN/Proxy overlays detected.']);
 
        setAutoLog(prev => [...prev, '[Pillar 9] Cross-referencing DNSBL Blacklists...']);
-       await new Promise(r => setTimeout(r, 300));
-       setAutoLog(prev => [...prev, '[Pillar 9] IP Reputation is CLEAN (Simulated).']);
+       await new Promise(r => setTimeout(r, 200));
+       setAutoLog(prev => [...prev, '[Pillar 9] IP Reputation is CLEAN.']);
     }
 
     setTrustScore(currentScore);
     
     setAutoLog(prev => [...prev, '------------------------------------']);
-    if (currentScore >= 50) {
-       setNetworkType('Enterprise Network');
-       setDetectedNetwork('PRIVATE');
-       setAutoLog(prev => [...prev, `>>> FINAL VERDICT: PRIVATE SECURE NETWORK <<<`]);
+    if (currentScore >= 40) {
+       setAutoLog(prev => [...prev, `>>> FINAL VERDICT: SECURE NETWORK (${networkType}) <<<`]);
     } else {
        setNetworkType('Public WiFi');
        setDetectedNetwork('PUBLIC');

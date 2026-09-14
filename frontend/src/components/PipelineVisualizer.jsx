@@ -174,11 +174,10 @@ export default function PipelineVisualizer({ status, onRun, onComplete, classifi
 
                     {isActive && (
                       <motion.div 
-                        className="absolute -inset-2 rounded-2xl border-2 z-0"
+                        className={`absolute -inset-4 rounded-3xl opacity-20 ${node.border.replace('border-', 'bg-').split(' ')[0]}`}
                         style={{ borderColor: 'inherit' }}
                         animate={{ scale: [1, 1.3, 1], opacity: [0.5, 0, 0.5] }}
                         transition={{ duration: 1.5, repeat: Infinity }}
-                        className={`absolute -inset-4 rounded-3xl opacity-20 ${node.border.replace('border-', 'bg-').split(' ')[0]}`}
                       />
                     )}
                   </div>
