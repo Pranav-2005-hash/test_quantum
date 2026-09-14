@@ -318,7 +318,12 @@ export default function App() {
             )}
 
             <section id="attack-simulation">
-              <AttackSimulation />
+              <AttackSimulation 
+                encryptedPackage={encryptedPackage}
+                securityDecision={securityDecision}
+                documentText={documentText}
+                classification={classification}
+              />
             </section>
 
             <section id="algorithms">

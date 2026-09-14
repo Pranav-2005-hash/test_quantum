@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { FileText, Search, BrainCircuit, Key, Lock, CheckCircle2, Play } from 'lucide-react';
 import { motion } from 'framer-motion';
 
+import { parseAlgorithmString, generateIdentity, encapsulate, aesGcmEncrypt, sign, bytesToHex, sha256Hex } from '../lib/pqc';
+
 const NODES = [
   { id: 'doc', label: 'Document Input', icon: FileText, color: 'text-gray-400', border: 'border-gray-600' },
   { id: 'nlp', label: 'NLP Classifier', icon: Search, color: 'text-[#00e5ff]', border: 'border-[#00e5ff] glow-cyan' },
@@ -11,23 +13,12 @@ const NODES = [
   { id: 'out', label: 'Secure Output', icon: Lock, color: 'text-white', border: 'border-white' }
 ];
 
-// Helper to generate fake hex
-const generateHex = (length) => {
-  const chars = '0123456789ABCDEF';
-  let result = '';
-  for (let i = 0; i < length; i++) result += chars[Math.floor(Math.random() * 16)];
-  return result;
-};
-
 export default function PipelineVisualizer({ status, onRun, onComplete, classification, securityDecision, logs, setLogs, documentText }) {
   const [activeStep, setActiveStep] = useState(-1);
   const [terminalText, setTerminalText] = useState("");
 
   const calculateHash = async (text) => {
-    const msgUint8 = new TextEncoder().encode(text || ' ');
-    const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    return sha256Hex(text);
   };
 
   useEffect(() => {
@@ -66,27 +57,40 @@ export default function PipelineVisualizer({ status, onRun, onComplete, classifi
     addLog(`AI adaptive selection: ${securityDecision.algorithms}`);
     await new Promise(r => setTimeout(r, 800));
 
+    // Parse real algorithms & generate key identity
+    const { kemAlgo, sigAlgo, kemLabel, sigLabel } = parseAlgorithmString(securityDecision.algorithms);
+    const identity = generateIdentity(securityDecision.algorithms);
+
     // Sign Step
     setActiveStep(3);
     const fp = await calculateHash(documentText);
     setTerminalText(prev => prev + `SIGN: SHA-256 fingerprint generated: ${fp.substring(0, 16)}...\n`);
     await new Promise(r => setTimeout(r, 500));
-    const sig = generateHex(32);
     
-    // Extract signature algorithm from the string (e.g. "HQC-256 + SLH-DSA-128s" -> "SLH-DSA-128s")
-    const signAlgo = securityDecision.algorithms.includes('+') ? securityDecision.algorithms.split('+')[1].trim() : 'SLH-DSA';
-    const encAlgo = securityDecision.algorithms.includes('+') ? securityDecision.algorithms.split('+')[0].trim() : 'HQC';
+    // Real PQC Signing
+    const fpBytes = new TextEncoder().encode(fp);
+    const sigBytes = sign(fpBytes, identity.sigSecretKey, sigAlgo);
+    const sigHex = bytesToHex(sigBytes);
 
-    setTerminalText(prev => prev + `SIGN: ${signAlgo} signing... Signature: ${sig}...\n`);
-    addLog(`Document signed with ${signAlgo}.`);
+    setTerminalText(prev => prev + `SIGN: ${sigLabel} signing (${sigBytes.length} bytes)... Signature: ${sigHex.substring(0, 16)}...\n`);
+    addLog(`Document signed with ${sigLabel} (${sigBytes.length}B signature).`);
     await new Promise(r => setTimeout(r, 800));
 
     // Encrypt Step
     setActiveStep(4);
-    setTerminalText(prev => prev + `ENC: ${encAlgo} key encapsulation running...\n`);
+    setTerminalText(prev => prev + `ENC: ${kemLabel} key encapsulation running...\n`);
     await new Promise(r => setTimeout(r, 500));
-    setTerminalText(prev => prev + `ENC: AES-256-GCM encrypting payload... Done.\n`);
-    addLog(`Payload encrypted using ${encAlgo} encapsulated master key.`);
+
+    // Real KEM Encapsulation + AES-256-GCM Encryption
+    const encResult = encapsulate(identity.kemPublicKey, kemAlgo);
+    const docBytes = new TextEncoder().encode(documentText || ' ');
+    const aesResult = await aesGcmEncrypt(docBytes, encResult.sharedSecret);
+    const ciphertextHex = bytesToHex(aesResult.ciphertext);
+    const ivHex = bytesToHex(aesResult.iv);
+    const authTagHex = bytesToHex(aesResult.ciphertext.slice(-16)).toUpperCase();
+
+    setTerminalText(prev => prev + `ENC: AES-256-GCM encrypting payload (${aesResult.ciphertext.length} bytes)... Done.\n`);
+    addLog(`Payload encrypted using ${kemLabel} encapsulated shared secret.`);
     await new Promise(r => setTimeout(r, 800));
 
     // Output Step
@@ -95,33 +99,21 @@ export default function PipelineVisualizer({ status, onRun, onComplete, classifi
     addLog(`Pipeline complete. Secure output generated successfully.`);
     await new Promise(r => setTimeout(r, 800));
     
-    // Complete
-    const textBytes = new TextEncoder().encode(documentText || ' ').length;
-    
-    // Dynamic sizes based on security level algorithms
-    let pkSize = 7245;
-    let ctSize = 14469 + textBytes;
-    let sigSize = 29792;
-    
-    if (securityDecision.algorithms.includes('McEliece')) {
-       pkSize = 1047319; // Classic McEliece public key size is huge
-       ctSize = 240 + textBytes;
-    } else if (securityDecision.algorithms.includes('128')) {
-       pkSize = 2249;
-       ctSize = 4481 + textBytes;
-       sigSize = 17088;
-    }
-
     const outputData = {
-      ciphertextHex: generateHex(Math.min(textBytes * 2 || 200, 1500)), 
-      signature: sig,
+      ciphertextHex, 
+      signature: sigHex,
       fingerprint: fp,
       timestamp: new Date().toLocaleTimeString(),
       algorithm: securityDecision.algorithms,
-      pkSize: pkSize.toLocaleString() + ' Bytes',
-      ctSize: ctSize.toLocaleString() + ' Bytes',
-      sigSize: sigSize.toLocaleString() + ' Bytes',
-      authTag: generateHex(16).toUpperCase()
+      pkSize: identity.kemPublicKey.length.toLocaleString() + ' Bytes',
+      ctSize: aesResult.ciphertext.length.toLocaleString() + ' Bytes',
+      sigSize: sigBytes.length.toLocaleString() + ' Bytes',
+      authTag: authTagHex,
+      ivHex,
+      sharedSecretHex: bytesToHex(encResult.sharedSecret),
+      kemSecretKeyHex: bytesToHex(identity.kemSecretKey),
+      sigPublicKeyHex: bytesToHex(identity.sigPublicKey),
+      receivedText: documentText
     };
     onComplete(outputData);
   };

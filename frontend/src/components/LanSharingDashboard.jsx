@@ -6,6 +6,20 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
+import { 
+  parseAlgorithmString, 
+  generateIdentity, 
+  encapsulate, 
+  decapsulate, 
+  aesGcmEncrypt, 
+  aesGcmDecrypt, 
+  sign, 
+  verify, 
+  bytesToHex, 
+  hexToBytes,
+  sha256Hex
+} from '../lib/pqc';
+
 export default function LanSharingDashboard({
   documentText,
   setDocumentText,
@@ -31,6 +45,29 @@ export default function LanSharingDashboard({
   const [isTransmitting, setIsTransmitting] = useState(false);
   const [transmitLog, setTransmitLog] = useState([]);
   const [lastSentPackage, setLastSentPackage] = useState(null);
+  const [nodeIdentityState, setNodeIdentityState] = useState(null);
+
+  // Register public identity on mount and whenever security decision algorithms change
+  useEffect(() => {
+    if (securityDecision?.algorithms) {
+      try {
+        const id = generateIdentity(securityDecision.algorithms);
+        setNodeIdentityState(id);
+        fetch('/api/identity', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            kemPublicKeyHex: bytesToHex(id.kemPublicKey),
+            sigPublicKeyHex: bytesToHex(id.sigPublicKey),
+            kemLabel: id.kemLabel,
+            sigLabel: id.sigLabel
+          })
+        }).catch(err => console.log("Identity register notice:", err.message));
+      } catch (e) {
+        console.error("Node identity generation error:", e);
+      }
+    }
+  }, [securityDecision?.algorithms]);
 
   // Receiver State
   const [inboxItems, setInboxItems] = useState([]);
@@ -65,21 +102,7 @@ export default function LanSharingDashboard({
 
   // Helper for SHA-256 fingerprinting
   const calculateHash = async (text) => {
-    try {
-      const msgUint8 = new TextEncoder().encode(text || ' ');
-      const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
-      const hashArray = Array.from(new Uint8Array(hashBuffer));
-      return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-    } catch (e) {
-      // Fallback pseudo-hash if subtle crypto fails on huge string
-      let hash = 0;
-      const str = text || ' ';
-      for (let i = 0; i < str.length; i++) {
-        hash = (hash << 5) - hash + str.charCodeAt(i);
-        hash |= 0;
-      }
-      return Math.abs(hash).toString(16).padStart(32, '0');
-    }
+    return sha256Hex(text);
   };
 
   const generateHex = (length) => {
@@ -171,36 +194,64 @@ export default function LanSharingDashboard({
       log(`Adaptive PQC Parameter Suite: ${securityDecision.algorithms}`);
       await new Promise(r => setTimeout(r, 150));
 
+      // Ensure sender identity is present
+      const senderId = nodeIdentityState || generateIdentity(securityDecision.algorithms);
+
+      // Fetch Target Receiver Public Identity over LAN
+      let targetKemPkHex = bytesToHex(senderId.kemPublicKey);
+      let targetSigPkHex = bytesToHex(senderId.sigPublicKey);
+
+      try {
+        const isLocalTarget = targetIp === localNetInfo?.localIp || targetIp === '127.0.0.1' || targetIp === 'localhost' || !targetIp;
+        const targetUrl = isLocalTarget ? '/api/identity' : `http://${targetIp}:${targetPort || 5000}/api/identity`;
+        
+        log(`Fetching PQC Public Key from Receiver Node (${targetIp})...`);
+        const idRes = await fetch(targetUrl, { signal: AbortSignal.timeout(3000) });
+        const idData = await idRes.json();
+        if (idData?.success && idData?.identity?.kemPublicKeyHex) {
+          targetKemPkHex = idData.identity.kemPublicKeyHex;
+          targetSigPkHex = idData.identity.sigPublicKeyHex;
+          log(`✅ Verified Target Receiver Public Key over LAN.`);
+        } else {
+          log(`Notice: Target has not registered key identity yet; using loopback public key.`);
+        }
+      } catch (idErr) {
+        log(`Notice: Target receiver unreachable for key lookup; using loopback public key.`);
+      }
+
       log(`Generating SHA-256 document fingerprint over payload...`);
       const payloadToHash = fileBase64 || documentText;
       const fp = await calculateHash(payloadToHash);
       log(`Fingerprint: ${fp.substring(0, 16)}...`);
       await new Promise(r => setTimeout(r, 150));
 
-      const sigAlgo = securityDecision.algorithms.includes('+') ? securityDecision.algorithms.split('+')[1].trim() : 'SLH-DSA-128s';
-      const kemAlgo = securityDecision.algorithms.includes('+') ? securityDecision.algorithms.split('+')[0].trim() : 'HQC-256';
+      const { kemAlgo, sigAlgo, kemLabel, sigLabel } = parseAlgorithmString(securityDecision.algorithms);
 
-      log(`Applying ${sigAlgo} digital signature...`);
-      const sig = generateHex(32);
+      log(`Applying ${sigLabel} digital signature over SHA-256 fingerprint...`);
+      const fpBytes = new TextEncoder().encode(fp);
+      const sigBytes = sign(fpBytes, senderId.sigSecretKey, sigAlgo);
+      const signatureHex = bytesToHex(sigBytes);
+      log(`Signature (${sigBytes.length} bytes): ${signatureHex.substring(0, 16)}...`);
       await new Promise(r => setTimeout(r, 150));
 
-      log(`Encapsulating master key with ${kemAlgo}...`);
-      const ciphertext = generateHex(Math.min(fileBase64.length * 2 || 400, 1500));
-      const authTag = generateHex(16).toUpperCase();
+      log(`Encapsulating shared secret against target's ${kemLabel} public key...`);
+      const targetKemPkBytes = hexToBytes(targetKemPkHex);
+      const encResult = encapsulate(targetKemPkBytes, kemAlgo);
+      const kemCiphertextHex = bytesToHex(encResult.ciphertext);
+
+      log(`Encrypting payload using AES-256-GCM (ML-KEM Shared Secret)...`);
+      const rawPayloadBytes = new TextEncoder().encode(fileBase64 || documentText);
+      const aesResult = await aesGcmEncrypt(rawPayloadBytes, encResult.sharedSecret);
+      const ciphertextHex = bytesToHex(aesResult.ciphertext);
+      const ivHex = bytesToHex(aesResult.iv);
+      const authTag = bytesToHex(aesResult.ciphertext.slice(-16)).toUpperCase();
       await new Promise(r => setTimeout(r, 150));
 
-      let pkSize = 7245;
-      let ctSize = 14469 + fileSize;
-      let sigSize = 29792;
-      if (securityDecision.algorithms.includes('McEliece')) {
-        pkSize = 1047319;
-        ctSize = 240 + fileSize;
-      } else if (securityDecision.algorithms.includes('128')) {
-        pkSize = 2249;
-        ctSize = 4481 + fileSize;
-        sigSize = 17088;
-      }
+      const pkSize = (targetKemPkBytes.length + hexToBytes(targetSigPkHex).length).toLocaleString() + ' Bytes';
+      const ctSize = aesResult.ciphertext.length.toLocaleString() + ' Bytes';
+      const sigSize = sigBytes.length.toLocaleString() + ' Bytes';
 
+      // TODO: documentText and fileBase64 still ride in packageData alongside real ciphertextHex for existing preview rendering; stripping plaintext from the wire is a follow-up task.
       const packageData = {
         filename,
         fileType,
@@ -211,17 +262,21 @@ export default function LanSharingDashboard({
         securityLevel: securityDecision.level,
         algorithms: securityDecision.algorithms,
         fingerprint: fp,
-        signature: sig,
-        ciphertextHex: ciphertext,
+        signature: signatureHex,
+        kemCiphertextHex,
+        ciphertextHex,
+        ivHex,
         authTag,
-        pkSize: pkSize.toLocaleString() + ' Bytes',
-        ctSize: ctSize.toLocaleString() + ' Bytes',
-        sigSize: sigSize.toLocaleString() + ' Bytes',
+        targetKemPublicKeyHex: targetKemPkHex,
+        senderSigPublicKeyHex: bytesToHex(senderId.sigPublicKey),
+        pkSize,
+        ctSize,
+        sigSize,
         timestamp: new Date().toLocaleTimeString()
       };
 
       if (mitmEnabled) {
-        log(`🚨 LIVE LAN MITM INTERCEPT ACTIVE! Injecting bit-flip corruption...`);
+        log(`🚨 LIVE LAN MITM INTERCEPT ACTIVE! Injecting bit-flip corruption into ciphertext...`);
         await new Promise(r => setTimeout(r, 300));
       }
 
@@ -252,7 +307,7 @@ export default function LanSharingDashboard({
           classification: packageData.classification.label,
           securityLevel: securityDecision.level,
           algorithm: securityDecision.algorithms,
-          signature: sig.substring(0, 12) + '...',
+          signature: signatureHex.substring(0, 12) + '...',
           status: mitmEnabled ? 'TAMPERED (MITM)' : 'SUCCESS'
         }, ...prev]);
 
@@ -279,14 +334,57 @@ export default function LanSharingDashboard({
     const payloadToHash = pkg.fileBase64 || pkg.documentText || ' ';
     const computed = await calculateHash(payloadToHash);
 
-    // Verify SHA-256 match
-    const isClean = (computed === pkg.fingerprint || computed.substring(0, 16) === pkg.fingerprint.substring(0, 16)) && !pkg.tamperedByMitm;
+    // 1. SHA-256 match
+    const hashMatch = (computed === pkg.fingerprint || computed.substring(0, 16) === pkg.fingerprint.substring(0, 16));
+
+    // 2. Real Decapsulate & Decrypt check
+    let aesGcmValid = true;
+    let sigValid = true;
+
+    if (pkg.ciphertextHex && pkg.ivHex && nodeIdentityState) {
+      try {
+        const { kemAlgo } = parseAlgorithmString(pkg.algorithms || securityDecision.algorithms);
+        const aesCtBytes = hexToBytes(pkg.ciphertextHex);
+        const ivBytes = hexToBytes(pkg.ivHex);
+        
+        let sharedSecret;
+        if (pkg.kemCiphertextHex) {
+          const kemCtBytes = hexToBytes(pkg.kemCiphertextHex);
+          sharedSecret = decapsulate(kemCtBytes, nodeIdentityState.kemSecretKey, kemAlgo);
+        } else {
+          sharedSecret = decapsulate(aesCtBytes, nodeIdentityState.kemSecretKey, kemAlgo);
+        }
+
+        await aesGcmDecrypt(aesCtBytes, ivBytes, sharedSecret);
+      } catch (aesErr) {
+        console.warn("Receiver side AES-GCM Decryption failed (ciphertext corrupted/tampered):", aesErr);
+        aesGcmValid = false;
+      }
+    }
+
+    // 3. Real SLH-DSA Signature Verification check
+    if (pkg.signature && pkg.senderSigPublicKeyHex) {
+      try {
+        const { sigAlgo } = parseAlgorithmString(pkg.algorithms || securityDecision.algorithms);
+        const sigBytes = hexToBytes(pkg.signature);
+        const senderSigPkBytes = hexToBytes(pkg.senderSigPublicKeyHex);
+        const fpBytes = new TextEncoder().encode(pkg.fingerprint);
+        sigValid = verify(fpBytes, sigBytes, senderSigPkBytes, sigAlgo);
+      } catch (sigErr) {
+        console.warn("Receiver side SLH-DSA signature verification failed:", sigErr);
+        sigValid = false;
+      }
+    }
+
+    const isClean = hashMatch && aesGcmValid && sigValid && !pkg.tamperedByMitm;
 
     const resultState = {
       verified: isClean,
       hash: computed,
       text: pkg.documentText,
-      tampered: pkg.tamperedByMitm || !isClean
+      tampered: pkg.tamperedByMitm || !isClean,
+      aesGcmValid,
+      sigValid
     };
 
     setDecryptedStateMap(prev => ({

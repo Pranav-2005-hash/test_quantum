@@ -2,6 +2,7 @@ const os = require('os');
 
 // In-memory relay inbox store
 let inbox = [];
+let nodeIdentity = null;
 
 // Helper to get local network IP
 const getLocalIp = () => {
@@ -204,10 +205,42 @@ const clearInbox = (req, res) => {
     return res.json({ success: true, message: "LAN Relay Inbox cleared." });
 };
 
+// POST /api/identity
+const registerIdentity = (req, res) => {
+    try {
+        const { kemPublicKeyHex, sigPublicKeyHex, kemLabel, sigLabel } = req.body;
+        if (!kemPublicKeyHex || !sigPublicKeyHex) {
+            return res.status(400).json({ success: false, message: "Missing public keys in identity payload." });
+        }
+        nodeIdentity = {
+            kemPublicKeyHex,
+            sigPublicKeyHex,
+            kemLabel,
+            sigLabel,
+            registeredAt: new Date().toISOString()
+        };
+        console.log(`[PQC Identity] Registered node public identity (${kemLabel} / ${sigLabel})`);
+        return res.json({ success: true, message: "Node PQC identity registered successfully.", identity: nodeIdentity });
+    } catch (err) {
+        console.error("Identity Registration Error:", err);
+        return res.status(500).json({ success: false, message: "Failed to register node identity." });
+    }
+};
+
+// GET /api/identity
+const getIdentity = (req, res) => {
+    if (!nodeIdentity) {
+        return res.status(404).json({ success: false, message: "No node identity registered yet." });
+    }
+    return res.json({ success: true, identity: nodeIdentity });
+};
+
 module.exports = {
     getNetworkInfo,
     transmitPackage,
     getInbox,
     acknowledgePackage,
-    clearInbox
+    clearInbox,
+    registerIdentity,
+    getIdentity
 };

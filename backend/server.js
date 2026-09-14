@@ -8,7 +8,9 @@ const {
     transmitPackage, 
     getInbox, 
     acknowledgePackage, 
-    clearInbox 
+    clearInbox,
+    registerIdentity,
+    getIdentity
 } = require('./controllers/lanController');
 
 const app = express();
@@ -32,6 +34,10 @@ app.post('/api/transmit', transmitPackage);
 app.get('/api/inbox', getInbox);
 app.post('/api/inbox/:id/ack', acknowledgePackage);
 app.delete('/api/inbox/clear', clearInbox);
+
+// Node PQC Identity Exchange Routes
+app.post('/api/identity', registerIdentity);
+app.get('/api/identity', getIdentity);
 
 app.listen(PORT, HOST, () => {
     console.log(`=================================================`);

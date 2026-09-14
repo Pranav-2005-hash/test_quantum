@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ArrowRightLeft, FileLock, CheckCircle2, Unlock } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { aesGcmDecrypt, hexToBytes, sha256Hex } from '../lib/pqc';
 
 export default function EncryptionOutput({ originalText, encryptedPackage }) {
   const [isDecrypted, setIsDecrypted] = useState(false);
@@ -8,21 +9,39 @@ export default function EncryptionOutput({ originalText, encryptedPackage }) {
   const [receivedText, setReceivedText] = useState(originalText);
   const [verificationStatus, setVerificationStatus] = useState(null); // 'success' or 'failed'
   const [computedHash, setComputedHash] = useState(null);
+  const [realDecryptedText, setRealDecryptedText] = useState(null);
+  const [aesDecryptSuccess, setAesDecryptSuccess] = useState(null);
 
   const calculateHash = async (text) => {
-    const msgUint8 = new TextEncoder().encode(text || ' ');
-    const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    return sha256Hex(text);
   };
 
   const handleDecrypt = async () => {
     setIsVerifying(true);
     setVerificationStatus(null);
+    setRealDecryptedText(null);
+    setAesDecryptSuccess(null);
     
     // Simulate pipeline decryption delay
-    await new Promise(r => setTimeout(r, 1500));
+    await new Promise(r => setTimeout(r, 1200));
+
+    // 1. Attempt Real AES-256-GCM Decryption using stored keys if present
+    try {
+      if (encryptedPackage.ciphertextHex && encryptedPackage.ivHex && encryptedPackage.sharedSecretHex) {
+        const ctBytes = hexToBytes(encryptedPackage.ciphertextHex);
+        const ivBytes = hexToBytes(encryptedPackage.ivHex);
+        const ssBytes = hexToBytes(encryptedPackage.sharedSecretHex);
+        const decryptedBytes = await aesGcmDecrypt(ctBytes, ivBytes, ssBytes);
+        const decStr = new TextDecoder().decode(decryptedBytes);
+        setRealDecryptedText(decStr);
+        setAesDecryptSuccess(true);
+      }
+    } catch (aesErr) {
+      console.error("AES-GCM Decryption failed:", aesErr);
+      setAesDecryptSuccess(false);
+    }
     
+    // 2. Signature & Hash verification over receivedText
     const currentHash = await calculateHash(receivedText);
     setComputedHash(currentHash);
     const originalFingerprint = encryptedPackage.fingerprint;
