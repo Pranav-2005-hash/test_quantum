@@ -63,6 +63,7 @@ const transmitPackage = async (req, res) => {
         const clientIp = req.ip || req.socket.remoteAddress || 'Unknown IP';
         const senderIp = clientIp.replace('::ffff:', '');
         const netInfo = getLocalIp();
+        const isForwarded = req.headers['x-qs-forwarded'];
 
         let finalPackage = { ...packageData };
         let tamperDetails = null;
@@ -108,46 +109,70 @@ const transmitPackage = async (req, res) => {
             acknowledged: false
         };
 
-        // Push to local inbox store (newest first)
-        inbox.unshift(entry);
+        const isLocalTarget = !targetIp || targetIp === netInfo.ip || targetIp === '127.0.0.1' || targetIp === 'localhost';
 
-        // Bound inbox size
-        if (inbox.length > 50) {
-            inbox = inbox.slice(0, 50);
+        // CASE 1: Incoming package forwarded from another node OR targeted to this node
+        if (isLocalTarget || isForwarded) {
+            inbox.unshift(entry);
+            if (inbox.length > 50) inbox = inbox.slice(0, 50);
+
+            return res.json({
+                success: true,
+                message: mitmTamperEnabled 
+                    ? "🚨 Package intercepted & corrupted by Live MITM overlay before delivery!"
+                    : "✅ Post-Quantum Encrypted Envelope delivered to local Receiver Inbox.",
+                id: entry.id,
+                tampered: !!mitmTamperEnabled,
+                tamperDetails
+            });
         }
 
-        // If targetIp is specified and different from this node's IP, attempt forwarding to remote target's backend
-        const isForwarded = req.headers['x-qs-forwarded'];
-        if (targetIp && targetIp !== netInfo.ip && targetIp !== '127.0.0.1' && targetIp !== 'localhost' && !isForwarded) {
-            try {
-                const targetUrl = `http://${targetIp}:${process.env.PORT || 5000}/api/transmit`;
-                console.log(`[LAN Relay] Forwarding package ${entry.id} to target: ${targetUrl}`);
-                fetch(targetUrl, {
-                    method: 'POST',
-                    headers: { 
-                        'Content-Type': 'application/json',
-                        'x-qs-forwarded': 'true'
-                    },
-                    body: JSON.stringify({
-                        targetIp,
-                        packageData: finalPackage,
-                        mitmTamperEnabled: false // Already tampered if mitm was enabled
-                    })
-                }).catch(err => console.log(`[LAN Relay] Forwarding notice: Target ${targetIp} offline or unreachable, saved locally.`));
-            } catch (e) {
-                // Ignore relay error
+        // CASE 2: Remote Target specified (e.g. Laptop 2 at 10.0.8.110) -> Relay directly across LAN
+        try {
+            const targetUrl = `http://${targetIp}:${process.env.PORT || 5000}/api/transmit`;
+            console.log(`[LAN Relay] Transmitting package ${entry.id} over Wi-Fi to remote target: ${targetUrl}`);
+            
+            const response = await fetch(targetUrl, {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'x-qs-forwarded': 'true'
+                },
+                body: JSON.stringify({
+                    targetIp,
+                    packageData: finalPackage,
+                    mitmTamperEnabled: false // Already tampered if mitm was active
+                }),
+                signal: AbortSignal.timeout(5000)
+            });
+
+            const remoteResData = await response.json();
+            if (remoteResData && remoteResData.success) {
+                console.log(`[LAN Relay] ✅ Successfully delivered package to Remote Receiver ${targetIp}`);
+                return res.json({
+                    success: true,
+                    message: `✅ Post-Quantum Document Envelope delivered over Wi-Fi to Receiver Node (${targetIp}).`,
+                    id: entry.id,
+                    deliveredRemote: true
+                });
+            } else {
+                throw new Error(remoteResData.message || 'Remote node error');
             }
-        }
 
-        return res.json({
-            success: true,
-            message: mitmTamperEnabled 
-                ? "🚨 Package intercepted & corrupted by Live MITM overlay before delivery!"
-                : "✅ Post-Quantum Encrypted Envelope delivered to LAN relay inbox.",
-            id: entry.id,
-            tampered: !!mitmTamperEnabled,
-            tamperDetails
-        });
+        } catch (relayErr) {
+            console.log(`[LAN Relay Notice] Target node ${targetIp} unreachable or offline (${relayErr.message}). Saving to local inbox fallback.`);
+            
+            // Fallback: Save to local inbox if remote node is offline
+            inbox.unshift(entry);
+            if (inbox.length > 50) inbox = inbox.slice(0, 50);
+
+            return res.json({
+                success: true,
+                message: `⚠️ Remote Target (${targetIp}) offline/unreachable. Saved to local inbox fallback.`,
+                id: entry.id,
+                fallbackLocal: true
+            });
+        }
 
     } catch (err) {
         console.error("Transmission Error:", err);
@@ -157,6 +182,8 @@ const transmitPackage = async (req, res) => {
 
 // GET /api/inbox
 const getInbox = (req, res) => {
+    const netInfo = getLocalIp();
+    // Return all items in local inbox
     return res.json({
         success: true,
         count: inbox.length,
