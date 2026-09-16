@@ -1,21 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  Radio, Send, Inbox, ShieldCheck, ShieldAlert, Wifi, Laptop, RefreshCw, 
+import {
+  Radio, Send, Inbox, ShieldCheck, ShieldAlert, Wifi, Laptop, RefreshCw,
   Trash2, AlertTriangle, Eye, EyeOff, Lock, Unlock, Zap, Cpu, Server, CheckCircle2,
   Copy, Download, ArrowRight, Shield, FileText, X, AlertCircle, File, Image as ImageIcon, Table
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-import { 
-  parseAlgorithmString, 
-  generateIdentity, 
-  encapsulate, 
-  decapsulate, 
-  aesGcmEncrypt, 
-  aesGcmDecrypt, 
-  sign, 
-  verify, 
-  bytesToHex, 
+import {
+  parseAlgorithmString,
+  generateIdentity,
+  encapsulate,
+  decapsulate,
+  aesGcmEncrypt,
+  aesGcmDecrypt,
+  sign,
+  verify,
+  bytesToHex,
   hexToBytes,
   sha256Hex
 } from '../lib/pqc';
@@ -37,7 +37,9 @@ export default function LanSharingDashboard({
   fileMeta,
   setFileMeta
 }) {
-  const [nodeMode, setNodeMode] = useState('sender'); // 'sender' | 'receiver'
+  const [nodeMode, setNodeMode] = useState('sender'); // 'sender' | 'attacker' | 'receiver'
+  const [gatewayIp, setGatewayIp] = useState('');
+  const [enableGatewayRouting, setEnableGatewayRouting] = useState(false);
   const [localNetInfo, setLocalNetInfo] = useState(null);
   const [targetIp, setTargetIp] = useState('');
   const [targetPort, setTargetPort] = useState('5000');
@@ -76,7 +78,7 @@ export default function LanSharingDashboard({
   const [pollCountdown, setPollCountdown] = useState(2);
   const [decryptedStateMap, setDecryptedStateMap] = useState({}); // pkgId -> { verified: boolean, hash: string, text: string }
   const [verifyingId, setVerifyingId] = useState(null);
-  
+
   // Document Reader Modal State
   const [selectedDocModal, setSelectedDocModal] = useState(null); // item object
 
@@ -175,7 +177,7 @@ export default function LanSharingDashboard({
       const filename = fileMeta?.name || ('quantum_doc_' + Date.now().toString().slice(-4) + '.pdf');
       const fileType = fileMeta?.type || 'application/pdf';
       const fileSize = fileMeta?.size || new TextEncoder().encode(documentText).length;
-      
+
       // Safe Base64 encoding for text
       let fileBase64 = fileMeta?.base64;
       if (!fileBase64) {
@@ -197,26 +199,38 @@ export default function LanSharingDashboard({
       // Ensure sender identity is present
       const senderId = nodeIdentityState || generateIdentity(securityDecision.algorithms);
 
-      // Fetch Target Receiver Public Identity over LAN
+      // Fetch Target Receiver Public Identity over LAN / Cross-Network
       let targetKemPkHex = bytesToHex(senderId.kemPublicKey);
       let targetSigPkHex = bytesToHex(senderId.sigPublicKey);
 
       try {
-        const isLocalTarget = targetIp === localNetInfo?.localIp || targetIp === '127.0.0.1' || targetIp === 'localhost' || !targetIp;
-        const targetUrl = isLocalTarget ? '/api/identity' : `http://${targetIp}:${targetPort || 5000}/api/identity`;
-        
-        log(`Fetching PQC Public Key from Receiver Node (${targetIp})...`);
-        const idRes = await fetch(targetUrl, { signal: AbortSignal.timeout(3000) });
+        const cleanTarget = (targetIp || '').trim();
+        const isLocalTarget = !cleanTarget ||
+          cleanTarget === '127.0.0.1' ||
+          cleanTarget === 'localhost' ||
+          cleanTarget === localNetInfo?.localIp ||
+          localNetInfo?.interfaces?.some(i => i.ip === cleanTarget);
+
+        const targetIdentityUrl = isLocalTarget
+          ? '/api/identity'
+          : (cleanTarget.startsWith('http://') || cleanTarget.startsWith('https://'))
+            ? `${cleanTarget.replace(/\/+$/, '')}/api/identity`
+            : cleanTarget.includes(':')
+              ? `http://${cleanTarget}/api/identity`
+              : `http://${cleanTarget}:${targetPort || 5000}/api/identity`;
+
+        log(`Fetching PQC Public Key from Receiver Node (${cleanTarget || 'Local Node'})...`);
+        const idRes = await fetch(targetIdentityUrl, { signal: AbortSignal.timeout(3000) });
         const idData = await idRes.json();
         if (idData?.success && idData?.identity?.kemPublicKeyHex) {
           targetKemPkHex = idData.identity.kemPublicKeyHex;
           targetSigPkHex = idData.identity.sigPublicKeyHex;
-          log(`✅ Verified Target Receiver Public Key over LAN.`);
+          log(`✅ Verified Target Receiver Public Key.`);
         } else {
           log(`Notice: Target has not registered key identity yet; using loopback public key.`);
         }
       } catch (idErr) {
-        log(`Notice: Target receiver unreachable for key lookup; using loopback public key.`);
+        log(`Notice: Target receiver key lookup offline; using loopback public key.`);
       }
 
       log(`Generating SHA-256 document fingerprint over payload...`);
@@ -280,13 +294,15 @@ export default function LanSharingDashboard({
         await new Promise(r => setTimeout(r, 300));
       }
 
-      log(`Transmitting post-quantum document envelope to LAN target ${targetIp}:${targetPort}...`);
+      log(`Transmitting post-quantum document envelope to destination ${targetIp || 'Local Inbox'}...`);
 
       const res = await fetch('/api/transmit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           targetIp,
+          targetPort,
+          gatewayIp: enableGatewayRouting ? gatewayIp : '',
           packageData,
           mitmTamperEnabled: mitmEnabled
         })
@@ -298,7 +314,7 @@ export default function LanSharingDashboard({
         log(`STATUS 200 OK: Document delivered to LAN relay inbox!`);
         log(`Package ID: ${data.id}`);
         setLastSentPackage(data);
-        
+
         // Add to global audit log
         setAuditLogs(prev => [{
           id: Date.now(),
@@ -327,7 +343,7 @@ export default function LanSharingDashboard({
 
   const handleVerifyPackage = async (item) => {
     setVerifyingId(item.id);
-    
+
     await new Promise(r => setTimeout(r, 400));
 
     const pkg = item.package;
@@ -346,7 +362,7 @@ export default function LanSharingDashboard({
         const { kemAlgo } = parseAlgorithmString(pkg.algorithms || securityDecision.algorithms);
         const aesCtBytes = hexToBytes(pkg.ciphertextHex);
         const ivBytes = hexToBytes(pkg.ivHex);
-        
+
         let sharedSecret;
         if (pkg.kemCiphertextHex) {
           const kemCtBytes = hexToBytes(pkg.kemCiphertextHex);
@@ -398,6 +414,32 @@ export default function LanSharingDashboard({
     setSelectedDocModal({ ...item, resultState });
   };
 
+  const handleAttackerForward = async (item, tamper) => {
+    try {
+      const dest = item.intendedTarget || targetIp;
+      log(`[Attacker C] ${tamper ? '🚨 Injecting corruption into' : '⚡ Forwarding clean'} package ${item.id} to Laptop B (${dest})...`);
+      const res = await fetch('/api/intercept/forward', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          packageId: item.id,
+          tamper,
+          destinationIp: dest,
+          destinationPort: targetPort
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert(data.message);
+        fetchInbox();
+      } else {
+        alert(`Forward Error: ${data.message}`);
+      }
+    } catch (err) {
+      alert(`Forward Failed: ${err.message}`);
+    }
+  };
+
   const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text);
     alert(`Copied document content to clipboard!`);
@@ -436,7 +478,7 @@ export default function LanSharingDashboard({
 
   return (
     <div className="space-y-10 font-sans">
-      
+
       {/* HEADER BAR WITH LOCAL NODE INTELLIGENCE */}
       <div className="glass-card rounded-2xl p-6 md:p-8 border border-gray-800 relative overflow-hidden">
         <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6 relative z-10">
@@ -455,130 +497,201 @@ export default function LanSharingDashboard({
             </div>
           </div>
 
-          {/* MODE SELECTOR TOGGLE (SENDER vs RECEIVER) */}
-          <div className="flex items-center bg-black/60 p-1.5 rounded-xl border border-gray-800 self-stretch lg:self-auto">
-            <button 
+          {/* MODE SELECTOR TOGGLE (SENDER vs ATTACKER vs RECEIVER) */}
+          <div className="flex items-center bg-black/60 p-1.5 rounded-xl border border-gray-800 self-stretch lg:self-auto gap-1">
+            <button
               onClick={() => setNodeMode('sender')}
-              className={`flex-1 lg:flex-none px-6 py-3 rounded-lg font-bold text-xs uppercase tracking-widest flex items-center justify-center gap-2 transition-all ${
-                nodeMode === 'sender'
+              className={`flex-1 lg:flex-none px-4 py-2.5 rounded-lg font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${nodeMode === 'sender'
                   ? 'bg-[rgba(0,229,255,0.15)] text-[#00e5ff] border border-[#00e5ff] glow-cyan'
                   : 'text-gray-400 hover:text-white'
-              }`}
+                }`}
             >
-              <Send className="w-4 h-4" /> Sender Mode
+              <Send className="w-4 h-4" /> Sender (Laptop A)
             </button>
-            <button 
+            <button
+              onClick={() => setNodeMode('attacker')}
+              className={`flex-1 lg:flex-none px-4 py-2.5 rounded-lg font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${nodeMode === 'attacker'
+                  ? 'bg-red-950/50 text-red-400 border border-red-500 glow-red animate-pulse'
+                  : 'text-gray-400 hover:text-white'
+                }`}
+            >
+              <AlertTriangle className="w-4 h-4 text-red-500" /> Attacker (Laptop C)
+            </button>
+            <button
               onClick={() => setNodeMode('receiver')}
-              className={`flex-1 lg:flex-none px-6 py-3 rounded-lg font-bold text-xs uppercase tracking-widest flex items-center justify-center gap-2 transition-all ${
-                nodeMode === 'receiver'
+              className={`flex-1 lg:flex-none px-4 py-2.5 rounded-lg font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${nodeMode === 'receiver'
                   ? 'bg-[rgba(124,58,237,0.15)] text-[#7c3aed] border border-[#7c3aed] glow-purple'
                   : 'text-gray-400 hover:text-white'
-              }`}
+                }`}
             >
-              <Inbox className="w-4 h-4" /> Receiver Mode ({inboxItems.length})
+              <Inbox className="w-4 h-4" /> Receiver (Laptop B) ({inboxItems.length})
             </button>
           </div>
         </div>
 
-        {/* LAN NETWORK ADDRESS BAR */}
-        <div className="mt-6 pt-6 border-t border-gray-800 grid md:grid-cols-3 gap-4 text-xs font-mono">
-          <div className="bg-black/40 p-3 rounded-lg border border-gray-800 flex justify-between items-center">
-            <span className="text-gray-500">Local Node IP:</span>
-            <span className="text-[#00e5ff] font-bold flex items-center gap-2">
-              {localNetInfo?.localIp || '127.0.0.1'}
-              <Copy 
-                className="w-3.5 h-3.5 text-gray-400 hover:text-white cursor-pointer" 
-                onClick={() => copyToClipboard(localNetInfo?.localIp || '127.0.0.1')} 
-              />
-            </span>
+        {/* LAN & CROSS-NETWORK ADDRESS BAR */}
+        <div className="mt-6 pt-6 border-t border-gray-800 space-y-3">
+          <div className="grid md:grid-cols-3 gap-4 text-xs font-mono">
+            <div className="bg-black/40 p-3 rounded-lg border border-gray-800 flex justify-between items-center">
+              <span className="text-gray-500">Primary Node IP:</span>
+              <span className="text-[#00e5ff] font-bold flex items-center gap-2">
+                {localNetInfo?.localIp || '127.0.0.1'}
+                <Copy
+                  className="w-3.5 h-3.5 text-gray-400 hover:text-white cursor-pointer"
+                  onClick={() => copyToClipboard(localNetInfo?.localIp || '127.0.0.1')}
+                />
+              </span>
+            </div>
+
+            <div className="bg-black/40 p-3 rounded-lg border border-gray-800 flex justify-between items-center">
+              <span className="text-gray-500">Node Web UI URL:</span>
+              <span className="text-green-400 font-bold flex items-center gap-2">
+                {`http://${localNetInfo?.localIp || 'localhost'}:5173`}
+                <Copy
+                  className="w-3.5 h-3.5 text-gray-400 hover:text-white cursor-pointer"
+                  onClick={() => copyToClipboard(`http://${localNetInfo?.localIp || 'localhost'}:5173`)}
+                />
+              </span>
+            </div>
+
+            <div className="bg-black/40 p-3 rounded-lg border border-gray-800 flex justify-between items-center">
+              <span className="text-gray-500">Relay Inbox:</span>
+              <span className="text-orange-400 font-bold">{inboxItems.length} Envelopes Queued</span>
+            </div>
           </div>
 
-          <div className="bg-black/40 p-3 rounded-lg border border-gray-800 flex justify-between items-center">
-            <span className="text-gray-500">Node Web UI URL:</span>
-            <span className="text-green-400 font-bold flex items-center gap-2">
-              {`http://${localNetInfo?.localIp || 'localhost'}:5173`}
-              <Copy 
-                className="w-3.5 h-3.5 text-gray-400 hover:text-white cursor-pointer" 
-                onClick={() => copyToClipboard(`http://${localNetInfo?.localIp || 'localhost'}:5173`)} 
-              />
-            </span>
-          </div>
-
-          <div className="bg-black/40 p-3 rounded-lg border border-gray-800 flex justify-between items-center">
-            <span className="text-gray-500">Target Relay Inbox:</span>
-            <span className="text-orange-400 font-bold">{inboxItems.length} Envelopes Queued</span>
-          </div>
+          {/* Active Network Adapters (Tailscale / Wi-Fi / Ethernet) */}
+          {localNetInfo?.interfaces && localNetInfo.interfaces.length > 1 && (
+            <div className="flex flex-wrap items-center gap-2 bg-black/20 p-2.5 rounded-lg border border-gray-800 text-[11px] font-mono">
+              <span className="text-gray-500 uppercase tracking-wider text-[10px] font-bold mr-1">Detected Interfaces:</span>
+              {localNetInfo.interfaces.map((iface, idx) => (
+                <span
+                  key={idx}
+                  onClick={() => {
+                    setTargetIp(iface.ip);
+                    copyToClipboard(iface.ip);
+                  }}
+                  className={`cursor-pointer px-2.5 py-1 rounded border transition-colors flex items-center gap-1.5 ${iface.type.includes('Tailscale')
+                      ? 'border-purple-500/50 bg-purple-950/30 text-purple-300 hover:bg-purple-900/50'
+                      : 'border-cyan-500/50 bg-cyan-950/30 text-cyan-300 hover:bg-cyan-900/50'
+                    }`}
+                  title="Click to select as target and copy IP"
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-green-400"></span>
+                  <strong>{iface.type}:</strong> {iface.ip}
+                  <Copy className="w-3 h-3 opacity-60 ml-0.5" />
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
       {/* SENDER MODE VIEW */}
       {nodeMode === 'sender' && (
         <div className="space-y-10 animate-in fade-in duration-500">
-          
+
           {/* TARGET RECEIVER SELECTION & MITM TOGGLE */}
           <div className="grid lg:grid-cols-3 gap-6">
-            
+
             {/* TARGET IP CONFIG */}
             <div className="lg:col-span-2 glass-card rounded-2xl p-6 border border-gray-800 space-y-4">
               <h3 className="text-sm font-bold uppercase tracking-wider text-gray-300 flex items-center gap-2">
-                <Laptop className="w-5 h-5 text-[#00e5ff]" /> Target Receiver Node Address
+                <Laptop className="w-5 h-5 text-[#00e5ff]" /> Target Receiver Node Address (Cross-Network Supported)
               </h3>
-              
+
               <div className="flex flex-col sm:flex-row gap-4">
                 <div className="flex-1 relative">
-                  <label className="text-[10px] text-gray-500 uppercase font-mono block mb-1">Receiver LAN IP Address</label>
-                  <input 
-                    type="text" 
-                    value={targetIp} 
+                  <label className="text-[10px] text-gray-500 uppercase font-mono block mb-1">
+                    Receiver Address (LAN IP / Tailscale 100.x.x.x / Public Tunnel URL)
+                  </label>
+                  <input
+                    type="text"
+                    value={targetIp}
                     onChange={(e) => setTargetIp(e.target.value)}
-                    placeholder="e.g. 192.168.1.45"
+                    placeholder="e.g. 192.168.1.45, 100.x.x.x, or https://node-b.loca.lt"
                     className="w-full bg-black/60 border border-gray-700 rounded-lg p-3 text-white font-mono text-sm focus:border-[#00e5ff] focus:outline-none"
                   />
                 </div>
-                
+
                 <div className="w-32 relative">
-                  <label className="text-[10px] text-gray-500 uppercase font-mono block mb-1">Backend Port</label>
-                  <input 
-                    type="text" 
-                    value={targetPort} 
+                  <label className="text-[10px] text-gray-500 uppercase font-mono block mb-1">Port (LAN/Tailscale)</label>
+                  <input
+                    type="text"
+                    value={targetPort}
                     onChange={(e) => setTargetPort(e.target.value)}
                     className="w-full bg-black/60 border border-gray-700 rounded-lg p-3 text-white font-mono text-sm focus:border-[#00e5ff] focus:outline-none"
                   />
                 </div>
 
                 <div className="flex items-end">
-                  <button 
-                    onClick={() => alert(`Target set to http://${targetIp}:${targetPort}`)}
+                  <button
+                    onClick={() => alert(`Target set to: ${targetIp.startsWith('http') ? targetIp : `${targetIp}:${targetPort}`}`)}
                     className="w-full sm:w-auto px-5 py-3 bg-gray-800 hover:bg-gray-700 text-gray-200 text-xs font-bold uppercase tracking-wider rounded-lg border border-gray-700 transition-colors"
                   >
                     Set Target
                   </button>
                 </div>
               </div>
-              
+
               <p className="text-[11px] text-gray-400 font-mono bg-black/40 p-2.5 rounded border border-gray-800">
-                💡 <strong>Tip for Laptop 2 Setup:</strong> If Laptop 2 opened this dashboard by visiting <span className="text-[#00e5ff]">http://{localNetInfo?.localIp || 'YOUR_IP'}:5173</span>, leave Receiver IP as <span className="text-[#00e5ff]">{localNetInfo?.localIp || 'YOUR_IP'}</span>. Both laptops will communicate over this active network relay!
+                🌐 <strong>Cross-Network Tip:</strong> Works across different Wi-Fi networks! Enter the receiver's <span className="text-purple-400 font-bold">Tailscale IP (100.x.x.x)</span>, a public tunnel URL (<span className="text-cyan-400 font-bold">https://...</span>), or same-router LAN IP (<span className="text-green-400 font-bold">192.168.x.x</span>).
               </p>
+
+              {/* ADVERSARY GATEWAY ROUTING (Laptop C Intermediary) */}
+              <div className="bg-black/40 p-4 rounded-xl border border-gray-800 space-y-3 mt-4">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold uppercase tracking-wider text-gray-300 flex items-center gap-2">
+                    <ShieldAlert className="w-4 h-4 text-red-400" /> Simulate Compromised Route (Laptop C Interceptor)
+                  </label>
+                  <button
+                    onClick={() => setEnableGatewayRouting(!enableGatewayRouting)}
+                    className={`px-3 py-1 text-[11px] font-mono font-bold rounded-lg border transition-all ${
+                      enableGatewayRouting 
+                        ? 'bg-red-600/30 border-red-500 text-red-300 glow-red' 
+                        : 'bg-gray-800 border-gray-700 text-gray-400'
+                    }`}
+                  >
+                    {enableGatewayRouting ? '🚨 Active: Routing via Laptop C' : 'Direct to Laptop B'}
+                  </button>
+                </div>
+
+                {enableGatewayRouting && (
+                  <div className="animate-in fade-in space-y-2">
+                    <label className="text-[10px] text-red-400 uppercase font-mono block">
+                      Attacker Node C IP (Compromised Router / Intermediary Eve)
+                    </label>
+                    <input
+                      type="text"
+                      value={gatewayIp}
+                      onChange={(e) => setGatewayIp(e.target.value)}
+                      placeholder="e.g. 10.0.9.36 (Laptop C's IP)"
+                      className="w-full bg-black/80 border border-red-500/60 rounded-lg p-2.5 text-white font-mono text-xs focus:border-red-400 focus:outline-none"
+                    />
+                    <p className="text-[10px] text-gray-400 font-mono">
+                      💡 <strong>Real MITM Simulation:</strong> The document is addressed directly to <strong>Laptop B ({targetIp || 'Receiver'})</strong>, but network traffic hops through <strong>Laptop C</strong>, allowing Eve to intercept and attack in flight!
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* LIVE LAN MITM INTERCEPT TOGGLE */}
-            <div className={`glass-card rounded-2xl p-6 border transition-all duration-300 ${
-              mitmEnabled ? 'border-red-500 bg-red-950/20 glow-red' : 'border-gray-800'
-            }`}>
+            <div className={`glass-card rounded-2xl p-6 border transition-all duration-300 ${mitmEnabled ? 'border-red-500 bg-red-950/20 glow-red' : 'border-gray-800'
+              }`}>
               <div className="flex justify-between items-start mb-4">
                 <div className="flex items-center gap-2">
                   <AlertTriangle className={`w-5 h-5 ${mitmEnabled ? 'text-red-500 animate-bounce' : 'text-gray-400'}`} />
                   <h3 className="text-sm font-bold uppercase tracking-wider text-white">Live MITM Intercept</h3>
                 </div>
-                
+
                 {/* Toggle switch */}
-                <button 
+                <button
                   onClick={() => setMitmEnabled(!mitmEnabled)}
-                  className={`w-14 h-7 flex items-center rounded-full p-1 transition-colors duration-300 ${
-                    mitmEnabled ? 'bg-red-600 justify-end' : 'bg-gray-800 justify-start'
-                  }`}
+                  className={`w-14 h-7 flex items-center rounded-full p-1 transition-colors duration-300 ${mitmEnabled ? 'bg-red-600 justify-end' : 'bg-gray-800 justify-start'
+                    }`}
                 >
-                  <motion.div 
+                  <motion.div
                     className="w-5 h-5 bg-white rounded-full shadow-md"
                     layout
                     transition={{ type: "spring", stiffness: 500, damping: 30 }}
@@ -590,11 +703,10 @@ export default function LanSharingDashboard({
                 When <span className="text-red-400 font-bold">ENABLED</span>, an adversary intercepts payload in transit over LAN, flips ciphertext bitstreams, and alters sensitivity tags to force signature mismatch at Receiver.
               </p>
 
-              <div className={`p-2 rounded text-[10px] font-mono font-bold text-center border ${
-                mitmEnabled 
-                  ? 'bg-red-500/20 border-red-500/50 text-red-300 animate-pulse' 
+              <div className={`p-2 rounded text-[10px] font-mono font-bold text-center border ${mitmEnabled
+                  ? 'bg-red-500/20 border-red-500/50 text-red-300 animate-pulse'
                   : 'bg-green-500/10 border-green-500/30 text-green-400'
-              }`}>
+                }`}>
                 {mitmEnabled ? '🚨 ATTACK MODE ACTIVE — CORRUPTS IN FLIGHT' : '🛡️ SECURE MODE — DIRECT ENCRYPTED'}
               </div>
             </div>
@@ -613,7 +725,7 @@ export default function LanSharingDashboard({
                 </p>
               </div>
 
-              <button 
+              <button
                 onClick={handleTransmitPayload}
                 disabled={isTransmitting || !documentText}
                 className="px-8 py-4 bg-[#00e5ff] text-black font-bold rounded-xl hover:bg-white transition-all glow-cyan disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-3 text-base shadow-xl"
@@ -642,10 +754,106 @@ export default function LanSharingDashboard({
         </div>
       )}
 
+      {/* ATTACKER CONSOLE VIEW (LAPTOP C) */}
+      {nodeMode === 'attacker' && (
+        <div className="space-y-8 animate-in fade-in duration-500">
+          <div className="glass-card rounded-2xl p-6 md:p-8 border border-red-500/40 bg-red-950/10 space-y-6">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-red-900/40 pb-4">
+              <div>
+                <h3 className="text-xl font-bold text-red-400 flex items-center gap-2">
+                  <AlertTriangle className="w-6 h-6 animate-pulse" /> Eve's Live MITM Interceptor Console (Laptop C)
+                </h3>
+                <p className="text-xs text-gray-400 mt-1 font-mono">
+                  Listening for in-flight traffic between Laptop A and Laptop B • Captured: <span className="text-red-400 font-bold">{inboxItems.length} Packets</span>
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={fetchInbox}
+                  className="px-4 py-2 bg-red-950/40 hover:bg-red-900/60 text-red-300 text-xs font-bold uppercase rounded-lg border border-red-700 transition-colors flex items-center gap-2"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" /> Refresh Sniffer
+                </button>
+              </div>
+            </div>
+
+            {inboxItems.length === 0 ? (
+              <div className="p-12 text-center text-gray-500 font-mono text-sm space-y-2">
+                <ShieldAlert className="w-12 h-12 mx-auto text-red-500/40 animate-bounce" />
+                <p className="text-base text-gray-300 font-bold">Waiting for Laptop A to transmit to Laptop B...</p>
+                <p className="text-xs text-gray-500">
+                  Transmit any file from Laptop A with routing set to Laptop C's IP ({localNetInfo?.localIp || '10.0.9.x'}) to capture it live!
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {inboxItems.map((item) => {
+                  const pkg = item.package;
+                  return (
+                    <div key={item.id} className="bg-black/60 rounded-xl p-5 border border-red-500/50 space-y-4 font-mono">
+                      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-2 border-b border-gray-800 pb-3">
+                        <div className="space-y-1">
+                          <span className="text-[11px] text-red-400 font-bold uppercase bg-red-500/10 px-2 py-0.5 rounded border border-red-500/30">
+                            ⚡ In-Flight Packet Captured
+                          </span>
+                          <div className="text-xs text-gray-300">
+                            Sender: <strong className="text-cyan-400">{item.senderIp} (Laptop A)</strong> ➔ Target: <strong className="text-purple-400">{item.intendedTarget || item.targetIp} (Laptop B)</strong>
+                          </div>
+                        </div>
+                        <div className="text-[10px] text-gray-500">{item.receivedAt}</div>
+                      </div>
+
+                      {/* SNIFFED PAYLOAD INSPECTION */}
+                      <div className="grid md:grid-cols-2 gap-4 text-xs bg-black/40 p-3 rounded-lg border border-gray-800">
+                        <div>
+                          <span className="text-gray-500 block">Document Name:</span>
+                          <span className="text-white font-bold">{pkg.filename}</span>
+                        </div>
+                        <div>
+                          <span className="text-gray-500 block">Sensitivity Classification:</span>
+                          <span className="text-orange-400 font-bold">{pkg.classification?.label || 'CONFIDENTIAL'}</span>
+                        </div>
+                        <div className="md:col-span-2">
+                          <span className="text-gray-500 block">Ciphertext Bitstream (Encrypted by ML-KEM):</span>
+                          <div className="text-[10px] text-green-400/80 truncate font-mono bg-black/60 p-2 rounded mt-1 border border-gray-900">
+                            {pkg.ciphertextHex || 'N/A'}
+                          </div>
+                          <p className="text-[10px] text-gray-400 mt-1 italic">
+                            🔒 Attacker Note: Eve cannot read plaintext content because ML-KEM-768 lattice encryption cannot be broken.
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* ATTACK ACTIONS */}
+                      <div className="flex flex-wrap gap-3 pt-2">
+                        <button
+                          onClick={() => handleAttackerForward(item, false)}
+                          className="px-5 py-2.5 bg-green-950/40 hover:bg-green-900/60 text-green-300 text-xs font-bold uppercase rounded-lg border border-green-600 transition-all flex items-center gap-2"
+                        >
+                          <CheckCircle2 className="w-4 h-4 text-green-400" /> Pass Unaltered to Laptop B (Verify Will Pass)
+                        </button>
+
+                        <button
+                          onClick={() => handleAttackerForward(item, true)}
+                          className="px-5 py-2.5 bg-red-600 hover:bg-red-500 text-white text-xs font-bold uppercase rounded-lg shadow-lg glow-red transition-all flex items-center gap-2 animate-pulse"
+                        >
+                          <AlertTriangle className="w-4 h-4" /> 🚨 Corrupt & Inject Attack to Laptop B
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* RECEIVER MODE VIEW */}
       {nodeMode === 'receiver' && (
         <div className="space-y-8 animate-in fade-in duration-500">
-          
+
           {/* RECEIVER RADAR HEADER */}
           <div className="glass-card rounded-2xl p-6 border border-gray-800 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
             <div className="flex items-center gap-4">
@@ -668,7 +876,7 @@ export default function LanSharingDashboard({
             </div>
 
             <div className="flex items-center gap-3">
-              <button 
+              <button
                 onClick={fetchInbox}
                 className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-200 text-xs font-bold uppercase rounded-lg border border-gray-700 transition-colors flex items-center gap-2"
               >
@@ -676,7 +884,7 @@ export default function LanSharingDashboard({
               </button>
 
               {inboxItems.length > 0 && (
-                <button 
+                <button
                   onClick={handleClearInbox}
                   className="px-4 py-2 bg-red-950/30 hover:bg-red-900/50 text-red-400 text-xs font-bold uppercase rounded-lg border border-red-900/50 transition-colors flex items-center gap-2"
                 >
@@ -704,15 +912,14 @@ export default function LanSharingDashboard({
                 const isVerifying = verifyingId === item.id;
 
                 return (
-                  <motion.div 
+                  <motion.div
                     key={item.id}
                     initial={{ opacity: 0, y: 15 }}
                     animate={{ opacity: 1, y: 0 }}
-                    className={`glass-card rounded-2xl p-6 md:p-8 border transition-all ${
-                      decState?.verified === true ? 'border-green-500/60 bg-green-950/10' :
-                      isTampered ? 'border-red-500/60 bg-red-950/20 glow-red' :
-                      'border-gray-800'
-                    }`}
+                    className={`glass-card rounded-2xl p-6 md:p-8 border transition-all ${decState?.verified === true ? 'border-green-500/60 bg-green-950/10' :
+                        isTampered ? 'border-red-500/60 bg-red-950/20 glow-red' :
+                          'border-gray-800'
+                      }`}
                   >
                     {/* ENVELOPE TOP ROW */}
                     <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6 border-b border-gray-800 pb-4">
@@ -725,11 +932,10 @@ export default function LanSharingDashboard({
                         <h4 className="text-lg font-bold text-white flex items-center gap-3">
                           {getFileIcon(pkg.filename, pkg.fileType)}
                           <span className="font-mono text-white font-bold">{pkg.filename || 'quantum_document.pdf'}</span>
-                          <span className={`px-2.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase border ${
-                            pkg.classification?.label === 'PII' ? 'bg-red-500/10 border-red-500 text-red-400' :
-                            pkg.classification?.label === 'FINANCIAL' ? 'bg-orange-500/10 border-orange-500 text-orange-400' :
-                            'bg-green-500/10 border-green-500 text-green-400'
-                          }`}>
+                          <span className={`px-2.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase border ${pkg.classification?.label === 'PII' ? 'bg-red-500/10 border-red-500 text-red-400' :
+                              pkg.classification?.label === 'FINANCIAL' ? 'bg-orange-500/10 border-orange-500 text-orange-400' :
+                                'bg-green-500/10 border-green-500 text-green-400'
+                            }`}>
                             {pkg.classification?.label || 'PUBLIC'}
                           </span>
                         </h4>
@@ -737,16 +943,15 @@ export default function LanSharingDashboard({
 
                       {/* VERIFICATION BADGE & BUTTON */}
                       <div className="flex items-center gap-3">
-                        <button 
+                        <button
                           onClick={() => handleVerifyPackage(item)}
                           disabled={isVerifying}
-                          className={`px-6 py-3 text-xs font-bold uppercase tracking-wider rounded-xl transition-all shadow-lg flex items-center gap-2 ${
-                            decState?.verified 
-                              ? 'bg-green-600 hover:bg-green-500 text-white glow-green' 
-                              : isTampered 
-                              ? 'bg-red-600 hover:bg-red-500 text-white glow-red' 
-                              : 'bg-[#7c3aed] hover:bg-purple-600 text-white glow-purple'
-                          }`}
+                          className={`px-6 py-3 text-xs font-bold uppercase tracking-wider rounded-xl transition-all shadow-lg flex items-center gap-2 ${decState?.verified
+                              ? 'bg-green-600 hover:bg-green-500 text-white glow-green'
+                              : isTampered
+                                ? 'bg-red-600 hover:bg-red-500 text-white glow-red'
+                                : 'bg-[#7c3aed] hover:bg-purple-600 text-white glow-purple'
+                            }`}
                         >
                           {isVerifying ? (
                             <span className="animate-pulse">Decrypting & Verifying...</span>
@@ -763,7 +968,7 @@ export default function LanSharingDashboard({
 
                     {/* ENVELOPE DETAILS GRID */}
                     <div className="grid md:grid-cols-3 gap-6 font-mono text-xs">
-                      
+
                       {/* COL 1: CRYPTO ALGORITHMS */}
                       <div className="bg-black/50 p-4 rounded-xl border border-gray-800 space-y-2">
                         <div className="text-[10px] text-gray-500 uppercase font-bold border-b border-gray-800 pb-1">Cryptographic Parameters</div>
@@ -789,7 +994,7 @@ export default function LanSharingDashboard({
                       {/* COL 3: PAYLOAD VERIFICATION RESULTS */}
                       <div className="bg-black/50 p-4 rounded-xl border border-gray-800 flex flex-col justify-between">
                         <div className="text-[10px] text-gray-500 uppercase font-bold border-b border-gray-800 pb-1 mb-2">Cryptographic Verification</div>
-                        
+
                         {!decState ? (
                           <div className="text-gray-500 italic text-center py-4">Click "Decrypt & Open Document" to run SHA-256 integrity check and view full file.</div>
                         ) : decState.verified ? (
@@ -812,11 +1017,11 @@ export default function LanSharingDashboard({
                       <div className="mt-6 pt-6 border-t border-gray-800 space-y-3">
                         <div className="flex justify-between items-center">
                           <h5 className="text-xs uppercase tracking-wider font-bold text-gray-300 flex items-center gap-2">
-                            <FileText className="w-4 h-4 text-[#00e5ff]" /> 
+                            <FileText className="w-4 h-4 text-[#00e5ff]" />
                             {decState.verified ? 'Decrypted Document Content Preview' : 'Corrupted Payload Content'}
                           </h5>
-                          
-                          <button 
+
+                          <button
                             onClick={() => setSelectedDocModal({ ...item, resultState: decState })}
                             className="text-xs text-[#00e5ff] hover:underline font-bold font-mono"
                           >
@@ -824,11 +1029,10 @@ export default function LanSharingDashboard({
                           </button>
                         </div>
 
-                        <div className={`p-4 rounded-xl font-mono text-xs leading-relaxed whitespace-pre-wrap max-h-40 overflow-y-auto border ${
-                          decState.verified 
-                            ? 'bg-black/80 border-green-500/40 text-green-300' 
+                        <div className={`p-4 rounded-xl font-mono text-xs leading-relaxed whitespace-pre-wrap max-h-40 overflow-y-auto border ${decState.verified
+                            ? 'bg-black/80 border-green-500/40 text-green-300'
                             : 'bg-red-950/40 border-red-500/50 text-red-300 line-through'
-                        }`}>
+                          }`}>
                           {pkg.documentText}
                         </div>
                       </div>
@@ -847,7 +1051,7 @@ export default function LanSharingDashboard({
       <AnimatePresence>
         {selectedDocModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-300">
-            <motion.div 
+            <motion.div
               initial={{ scale: 0.9, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.9, opacity: 0, y: 20 }}
@@ -870,11 +1074,10 @@ export default function LanSharingDashboard({
                     <h3 className="text-xl font-bold text-white flex items-center gap-3">
                       {getFileIcon(selectedDocModal.package.filename, selectedDocModal.package.fileType)}
                       {selectedDocModal.package.filename || 'quantum_document.pdf'}
-                      <span className={`px-2.5 py-0.5 rounded text-xs font-mono font-bold uppercase border ${
-                        selectedDocModal.package.classification?.label === 'PII' ? 'bg-red-500/20 border-red-500 text-red-300' :
-                        selectedDocModal.package.classification?.label === 'FINANCIAL' ? 'bg-orange-500/20 border-orange-500 text-orange-300' :
-                        'bg-green-500/20 border-green-500 text-green-300'
-                      }`}>
+                      <span className={`px-2.5 py-0.5 rounded text-xs font-mono font-bold uppercase border ${selectedDocModal.package.classification?.label === 'PII' ? 'bg-red-500/20 border-red-500 text-red-300' :
+                          selectedDocModal.package.classification?.label === 'FINANCIAL' ? 'bg-orange-500/20 border-orange-500 text-orange-300' :
+                            'bg-green-500/20 border-green-500 text-green-300'
+                        }`}>
                         {selectedDocModal.package.classification?.label || 'PUBLIC'}
                       </span>
                     </h3>
@@ -884,7 +1087,7 @@ export default function LanSharingDashboard({
                   </div>
                 </div>
 
-                <button 
+                <button
                   onClick={() => setSelectedDocModal(null)}
                   className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors"
                 >
@@ -893,11 +1096,10 @@ export default function LanSharingDashboard({
               </div>
 
               {/* MODAL STATUS BANNER */}
-              <div className={`p-4 border-b text-xs font-mono font-bold flex items-center justify-between ${
-                selectedDocModal.resultState?.verified 
-                  ? 'bg-green-950/40 border-green-500/40 text-green-400' 
+              <div className={`p-4 border-b text-xs font-mono font-bold flex items-center justify-between ${selectedDocModal.resultState?.verified
+                  ? 'bg-green-950/40 border-green-500/40 text-green-400'
                   : 'bg-red-950/40 border-red-500/40 text-red-400'
-              }`}>
+                }`}>
                 <div className="flex items-center gap-2">
                   {selectedDocModal.resultState?.verified ? (
                     <>
@@ -917,19 +1119,18 @@ export default function LanSharingDashboard({
 
               {/* BODY: DOCUMENT FILE PREVIEW & READER */}
               <div className="p-6 overflow-y-auto custom-scrollbar flex-1 space-y-6">
-                
+
                 {/* ALWAYS RENDER DECRYPTED DOCUMENT TEXT VIEW */}
                 <div>
                   <h4 className="text-xs uppercase tracking-widest font-bold text-gray-400 mb-2 flex items-center justify-between">
                     <span>Decrypted Document Content View</span>
                     <span className="text-[10px] text-[#00e5ff] font-mono font-bold">Full Formatted Text Body</span>
                   </h4>
-                  
-                  <div className={`p-6 rounded-xl font-mono text-sm leading-relaxed whitespace-pre-wrap border shadow-inner max-h-96 overflow-y-auto ${
-                    selectedDocModal.resultState?.verified 
-                      ? 'bg-black/80 border-green-500/30 text-green-200' 
+
+                  <div className={`p-6 rounded-xl font-mono text-sm leading-relaxed whitespace-pre-wrap border shadow-inner max-h-96 overflow-y-auto ${selectedDocModal.resultState?.verified
+                      ? 'bg-black/80 border-green-500/30 text-green-200'
                       : 'bg-red-950/30 border-red-500/40 text-red-300 line-through'
-                  }`}>
+                    }`}>
                     {selectedDocModal.package.documentText || `Document File: ${selectedDocModal.package.filename}\nSize: ${selectedDocModal.package.fileSize} Bytes`}
                   </div>
                 </div>
@@ -941,8 +1142,8 @@ export default function LanSharingDashboard({
                       <span>Interactive PDF Document Render Window</span>
                       <span className="text-[10px] text-[#00e5ff] font-mono font-bold">Adobe PDF Engine</span>
                     </h4>
-                    
-                    <iframe 
+
+                    <iframe
                       src={selectedDocModal.package.fileBase64}
                       title="Decrypted PDF Viewer"
                       className="w-full h-96 rounded-xl border border-gray-700 bg-white shadow-lg"
@@ -955,7 +1156,7 @@ export default function LanSharingDashboard({
                   <h4 className="text-xs uppercase tracking-widest font-bold text-[#00e5ff] border-b border-gray-800 pb-2">
                     Cryptographic Verification Audit Block
                   </h4>
-                  
+
                   <div className="grid md:grid-cols-2 gap-4">
                     <div>
                       <span className="text-gray-500 block mb-1">SHA-256 Document Fingerprint:</span>
@@ -978,10 +1179,10 @@ export default function LanSharingDashboard({
               {/* MODAL FOOTER WITH ACTION BUTTONS */}
               <div className="p-6 border-t border-gray-800 bg-[#0a0f1e]/90 flex flex-wrap justify-between items-center gap-4">
                 <div className="flex gap-3">
-                  <button 
+                  <button
                     onClick={() => downloadOriginalDocumentFile(
-                      selectedDocModal.package.filename, 
-                      selectedDocModal.package.fileBase64, 
+                      selectedDocModal.package.filename,
+                      selectedDocModal.package.fileBase64,
                       selectedDocModal.package.documentText
                     )}
                     className="px-5 py-3 bg-green-600 hover:bg-green-500 text-white text-xs font-bold uppercase rounded-xl transition-all shadow-lg glow-green flex items-center gap-2"
@@ -989,7 +1190,7 @@ export default function LanSharingDashboard({
                     <Download className="w-4 h-4 text-white" /> Download Decrypted Document File ({selectedDocModal.package.filename})
                   </button>
 
-                  <button 
+                  <button
                     onClick={() => copyToClipboard(selectedDocModal.package.documentText)}
                     className="px-4 py-3 bg-gray-800 hover:bg-gray-700 text-white text-xs font-bold uppercase rounded-xl border border-gray-700 transition-colors flex items-center gap-2"
                   >
@@ -997,7 +1198,7 @@ export default function LanSharingDashboard({
                   </button>
                 </div>
 
-                <button 
+                <button
                   onClick={() => setSelectedDocModal(null)}
                   className="px-6 py-3 bg-[#00e5ff] text-black text-xs font-bold uppercase tracking-wider rounded-xl hover:bg-white transition-all shadow-lg"
                 >

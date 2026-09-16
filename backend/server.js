@@ -6,6 +6,7 @@ const { getSystemBattery } = require('./controllers/systemController');
 const { 
     getNetworkInfo, 
     transmitPackage, 
+    forwardInterceptedPackage,
     getInbox, 
     acknowledgePackage, 
     clearInbox,
@@ -31,6 +32,7 @@ app.get('/api/osint/scan', runOsintScan);
 // LAN Dual-Node Routes
 app.get('/api/network-info', getNetworkInfo);
 app.post('/api/transmit', transmitPackage);
+app.post('/api/intercept/forward', forwardInterceptedPackage);
 app.get('/api/inbox', getInbox);
 app.post('/api/inbox/:id/ack', acknowledgePackage);
 app.delete('/api/inbox/clear', clearInbox);
