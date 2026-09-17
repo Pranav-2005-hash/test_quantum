@@ -44,6 +44,7 @@ export default function LanSharingDashboard({
   const [targetIp, setTargetIp] = useState('');
   const [targetPort, setTargetPort] = useState('5000');
   const [mitmEnabled, setMitmEnabled] = useState(false);
+  const [encryptionMode, setEncryptionMode] = useState('quantum'); // 'quantum' | 'standard'
   const [isTransmitting, setIsTransmitting] = useState(false);
   const [transmitLog, setTransmitLog] = useState([]);
   const [lastSentPackage, setLastSentPackage] = useState(null);
@@ -234,110 +235,142 @@ export default function LanSharingDashboard({
       await new Promise(r => setTimeout(r, 150));
 
       log(`Document sensitivity: ${classification?.label || 'PUBLIC'}`);
-      log(`Adaptive PQC Parameter Suite: ${securityDecision.algorithms}`);
+      log(`Transmission Mode: ${encryptionMode === 'quantum' ? '🔒 QUANTUM-ENCRYPTED (ML-KEM + ML-DSA)' : '⚠️ STANDARD / UNENCRYPTED'}`);
       await new Promise(r => setTimeout(r, 150));
 
-      // Ensure sender identity is present
-      const senderId = nodeIdentityState || generateIdentity(securityDecision.algorithms);
+      const isQuantumMode = encryptionMode === 'quantum';
 
-      // Fetch Target Receiver Public Identity over LAN / Cross-Network
-      let targetKemPkHex = bytesToHex(senderId.kemPublicKey);
-      let targetSigPkHex = bytesToHex(senderId.sigPublicKey);
+      // ── QUANTUM-ENCRYPTED MODE: Full PQC pipeline ──
+      let packageData;
 
-      try {
-        const cleanTarget = (targetIp || '').trim();
-        const isLocalTarget = !cleanTarget ||
-          cleanTarget === '127.0.0.1' ||
-          cleanTarget === 'localhost' ||
-          cleanTarget === localNetInfo?.localIp ||
-          localNetInfo?.interfaces?.some(i => i.ip === cleanTarget);
+      if (isQuantumMode) {
+        log(`Adaptive PQC Parameter Suite: ${securityDecision.algorithms}`);
+        await new Promise(r => setTimeout(r, 150));
 
-        const targetIdentityUrl = isLocalTarget
-          ? '/api/identity'
-          : (cleanTarget.startsWith('http://') || cleanTarget.startsWith('https://'))
-            ? `${cleanTarget.replace(/\/+$/, '')}/api/identity`
-            : cleanTarget.includes(':')
-              ? `http://${cleanTarget}/api/identity`
-              : `http://${cleanTarget}:${targetPort || 5000}/api/identity`;
+        // Ensure sender identity is present
+        const senderId = nodeIdentityState || generateIdentity(securityDecision.algorithms);
 
-        log(`Fetching PQC Public Key from Receiver Node (${cleanTarget || 'Local Node'})...`);
-        const idRes = await fetch(targetIdentityUrl, { signal: AbortSignal.timeout(3000) });
-        const idData = await idRes.json();
-        if (idData?.success && idData?.identity?.kemPublicKeyHex) {
-          const { kemLabel } = parseAlgorithmString(securityDecision.algorithms);
-          if (idData.identity.keysBySuite && idData.identity.keysBySuite[kemLabel]) {
-            targetKemPkHex = idData.identity.keysBySuite[kemLabel];
-            log(`✅ Verified Target Receiver Public Key for ${kemLabel}.`);
+        // Fetch Target Receiver Public Identity over LAN / Cross-Network
+        let targetKemPkHex = bytesToHex(senderId.kemPublicKey);
+        let targetSigPkHex = bytesToHex(senderId.sigPublicKey);
+
+        try {
+          const cleanTarget = (targetIp || '').trim();
+          const isLocalTarget = !cleanTarget ||
+            cleanTarget === '127.0.0.1' ||
+            cleanTarget === 'localhost' ||
+            cleanTarget === localNetInfo?.localIp ||
+            localNetInfo?.interfaces?.some(i => i.ip === cleanTarget);
+
+          const targetIdentityUrl = isLocalTarget
+            ? '/api/identity'
+            : (cleanTarget.startsWith('http://') || cleanTarget.startsWith('https://'))
+              ? `${cleanTarget.replace(/\/+$/, '')}/api/identity`
+              : cleanTarget.includes(':')
+                ? `http://${cleanTarget}/api/identity`
+                : `http://${cleanTarget}:${targetPort || 5000}/api/identity`;
+
+          log(`Fetching PQC Public Key from Receiver Node (${cleanTarget || 'Local Node'})...`);
+          const idRes = await fetch(targetIdentityUrl, { signal: AbortSignal.timeout(3000) });
+          const idData = await idRes.json();
+          if (idData?.success && idData?.identity?.kemPublicKeyHex) {
+            const { kemLabel } = parseAlgorithmString(securityDecision.algorithms);
+            if (idData.identity.keysBySuite && idData.identity.keysBySuite[kemLabel]) {
+              targetKemPkHex = idData.identity.keysBySuite[kemLabel];
+              log(`✅ Verified Target Receiver Public Key for ${kemLabel}.`);
+            } else {
+              targetKemPkHex = idData.identity.kemPublicKeyHex;
+              log(`✅ Verified Target Receiver Public Key.`);
+            }
+            targetSigPkHex = idData.identity.sigPublicKeyHex;
           } else {
-            targetKemPkHex = idData.identity.kemPublicKeyHex;
-            log(`✅ Verified Target Receiver Public Key.`);
+            log(`Notice: Target has not registered key identity yet; using loopback public key.`);
           }
-          targetSigPkHex = idData.identity.sigPublicKeyHex;
-        } else {
-          log(`Notice: Target has not registered key identity yet; using loopback public key.`);
+        } catch (idErr) {
+          log(`Notice: Target receiver key lookup offline; using loopback public key.`);
         }
-      } catch (idErr) {
-        log(`Notice: Target receiver key lookup offline; using loopback public key.`);
+
+        log(`Generating SHA-256 document fingerprint over payload...`);
+        const payloadToHash = fileBase64 || documentText;
+        const fp = await calculateHash(payloadToHash);
+        log(`Fingerprint: ${fp.substring(0, 16)}...`);
+        await new Promise(r => setTimeout(r, 150));
+
+        const { kemAlgo, sigAlgo, kemLabel, sigLabel } = parseAlgorithmString(securityDecision.algorithms);
+
+        log(`Applying ${sigLabel} digital signature over SHA-256 fingerprint...`);
+        const fpBytes = new TextEncoder().encode(fp);
+        const sigBytes = sign(fpBytes, senderId.sigSecretKey, sigAlgo);
+        const signatureHex = bytesToHex(sigBytes);
+        log(`Signature (${sigBytes.length} bytes): ${signatureHex.substring(0, 16)}...`);
+        await new Promise(r => setTimeout(r, 150));
+
+        log(`Encapsulating shared secret against target's public key...`);
+        const targetKemPkBytes = hexToBytes(targetKemPkHex);
+        const encResult = encapsulate(targetKemPkBytes, kemAlgo);
+        if (encResult.actualKemLabel && encResult.actualKemLabel !== kemLabel) {
+          log(`ℹ️ Auto-negotiated KEM suite to ${encResult.actualKemLabel} matching Target public key (${targetKemPkBytes.length} bytes).`);
+        }
+        const kemCiphertextHex = bytesToHex(encResult.ciphertext);
+
+        log(`Encrypting payload using AES-256-GCM (ML-KEM Shared Secret)...`);
+        const rawPayloadBytes = new TextEncoder().encode(fileBase64 || documentText);
+        const aesResult = await aesGcmEncrypt(rawPayloadBytes, encResult.sharedSecret);
+        const ciphertextHex = bytesToHex(aesResult.ciphertext);
+        const ivHex = bytesToHex(aesResult.iv);
+        const authTag = bytesToHex(aesResult.ciphertext.slice(-16)).toUpperCase();
+        await new Promise(r => setTimeout(r, 150));
+
+        const pkSize = (targetKemPkBytes.length + hexToBytes(targetSigPkHex).length).toLocaleString() + ' Bytes';
+        const ctSize = aesResult.ciphertext.length.toLocaleString() + ' Bytes';
+        const sigSize = sigBytes.length.toLocaleString() + ' Bytes';
+
+        packageData = {
+          filename,
+          fileType,
+          fileSize,
+          fileBase64,
+          documentText,
+          classification: classification || { label: 'PUBLIC', confidence: 99 },
+          securityLevel: securityDecision.level,
+          algorithms: securityDecision.algorithms,
+          fingerprint: fp,
+          signature: signatureHex,
+          kemCiphertextHex,
+          ciphertextHex,
+          ivHex,
+          authTag,
+          targetKemPublicKeyHex: targetKemPkHex,
+          senderSigPublicKeyHex: bytesToHex(senderId.sigPublicKey),
+          pkSize,
+          ctSize,
+          sigSize,
+          timestamp: new Date().toLocaleTimeString()
+        };
+      } else {
+        // ── STANDARD / UNENCRYPTED MODE: Raw bytes, no PQC wrapping ──
+        log(`⚠️ STANDARD MODE: Sending raw unencrypted payload over LAN...`);
+        log(`⚠️ WARNING: No quantum-resilient cryptographic protection! Payload is fully readable and alterable by any MITM attacker.`);
+        await new Promise(r => setTimeout(r, 200));
+
+        const payloadToHash = fileBase64 || documentText;
+        const fp = await calculateHash(payloadToHash);
+        log(`Plaintext SHA-256 Fingerprint: ${fp.substring(0, 16)}...`);
+
+        packageData = {
+          filename,
+          fileType,
+          fileSize,
+          fileBase64,
+          documentText,
+          classification: classification || { label: 'PUBLIC', confidence: 99 },
+          securityLevel: 'NONE',
+          algorithms: 'NONE (Standard / Unencrypted)',
+          fingerprint: fp,
+          // No PQC fields — these are intentionally absent so isQuantumProtected() returns false on Laptop C
+          timestamp: new Date().toLocaleTimeString()
+        };
       }
-
-      log(`Generating SHA-256 document fingerprint over payload...`);
-      const payloadToHash = fileBase64 || documentText;
-      const fp = await calculateHash(payloadToHash);
-      log(`Fingerprint: ${fp.substring(0, 16)}...`);
-      await new Promise(r => setTimeout(r, 150));
-
-      const { kemAlgo, sigAlgo, kemLabel, sigLabel } = parseAlgorithmString(securityDecision.algorithms);
-
-      log(`Applying ${sigLabel} digital signature over SHA-256 fingerprint...`);
-      const fpBytes = new TextEncoder().encode(fp);
-      const sigBytes = sign(fpBytes, senderId.sigSecretKey, sigAlgo);
-      const signatureHex = bytesToHex(sigBytes);
-      log(`Signature (${sigBytes.length} bytes): ${signatureHex.substring(0, 16)}...`);
-      await new Promise(r => setTimeout(r, 150));
-
-      log(`Encapsulating shared secret against target's public key...`);
-      const targetKemPkBytes = hexToBytes(targetKemPkHex);
-      const encResult = encapsulate(targetKemPkBytes, kemAlgo);
-      if (encResult.actualKemLabel && encResult.actualKemLabel !== kemLabel) {
-        log(`ℹ️ Auto-negotiated KEM suite to ${encResult.actualKemLabel} matching Target public key (${targetKemPkBytes.length} bytes).`);
-      }
-      const kemCiphertextHex = bytesToHex(encResult.ciphertext);
-
-      log(`Encrypting payload using AES-256-GCM (ML-KEM Shared Secret)...`);
-      const rawPayloadBytes = new TextEncoder().encode(fileBase64 || documentText);
-      const aesResult = await aesGcmEncrypt(rawPayloadBytes, encResult.sharedSecret);
-      const ciphertextHex = bytesToHex(aesResult.ciphertext);
-      const ivHex = bytesToHex(aesResult.iv);
-      const authTag = bytesToHex(aesResult.ciphertext.slice(-16)).toUpperCase();
-      await new Promise(r => setTimeout(r, 150));
-
-      const pkSize = (targetKemPkBytes.length + hexToBytes(targetSigPkHex).length).toLocaleString() + ' Bytes';
-      const ctSize = aesResult.ciphertext.length.toLocaleString() + ' Bytes';
-      const sigSize = sigBytes.length.toLocaleString() + ' Bytes';
-
-      // TODO: documentText and fileBase64 still ride in packageData alongside real ciphertextHex for existing preview rendering; stripping plaintext from the wire is a follow-up task.
-      const packageData = {
-        filename,
-        fileType,
-        fileSize,
-        fileBase64,
-        documentText,
-        classification: classification || { label: 'PUBLIC', confidence: 99 },
-        securityLevel: securityDecision.level,
-        algorithms: securityDecision.algorithms,
-        fingerprint: fp,
-        signature: signatureHex,
-        kemCiphertextHex,
-        ciphertextHex,
-        ivHex,
-        authTag,
-        targetKemPublicKeyHex: targetKemPkHex,
-        senderSigPublicKeyHex: bytesToHex(senderId.sigPublicKey),
-        pkSize,
-        ctSize,
-        sigSize,
-        timestamp: new Date().toLocaleTimeString()
-      };
 
       if (mitmEnabled) {
         log(`🚨 LIVE LAN MITM INTERCEPT ACTIVE! Injecting bit-flip corruption into ciphertext...`);
@@ -379,9 +412,9 @@ export default function LanSharingDashboard({
           timestamp: new Date().toISOString(),
           filename: packageData.filename,
           classification: packageData.classification.label,
-          securityLevel: securityDecision.level,
-          algorithm: securityDecision.algorithms,
-          signature: signatureHex.substring(0, 12) + '...',
+          securityLevel: isQuantumMode ? securityDecision.level : 'NONE',
+          algorithm: isQuantumMode ? securityDecision.algorithms : 'Standard (Unencrypted)',
+          signature: isQuantumMode ? (packageData.signature || '').substring(0, 12) + '...' : 'N/A',
           status: mitmEnabled ? 'TAMPERED (MITM)' : 'SUCCESS'
         }, ...prev]);
 
@@ -695,6 +728,104 @@ export default function LanSharingDashboard({
       {nodeMode === 'sender' && (
         <div className="space-y-10 animate-in fade-in duration-500">
 
+          {/* ── ENCRYPTION MODE SELECTOR (STANDARD vs QUANTUM) ── */}
+          <div className="glass-card rounded-2xl p-6 md:p-8 border border-gray-800 space-y-5">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+              <div>
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                  <Shield className="w-5 h-5 text-[#00e5ff]" /> Select Transmission Mode
+                </h3>
+                <p className="text-xs text-gray-400 mt-1">
+                  Choose whether this file transfer is protected by post-quantum cryptography or sent as raw unencrypted bytes.
+                </p>
+              </div>
+              <div className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold border ${
+                encryptionMode === 'quantum'
+                  ? 'bg-[#00e5ff]/15 text-[#00e5ff] border-[#00e5ff]/50'
+                  : 'bg-amber-500/15 text-amber-400 border-amber-500/50 animate-pulse'
+              }`}>
+                {encryptionMode === 'quantum' ? '🔒 Quantum-Encrypted' : '⚠️ Standard / Unencrypted'}
+              </div>
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-4">
+              {/* OPTION 2: Quantum-Encrypted */}
+              <button
+                onClick={() => setEncryptionMode('quantum')}
+                className={`relative p-5 rounded-xl border-2 text-left transition-all duration-300 group ${
+                  encryptionMode === 'quantum'
+                    ? 'border-[#00e5ff] bg-[#00e5ff]/10 shadow-lg shadow-[#00e5ff]/10'
+                    : 'border-gray-700 bg-black/40 hover:border-gray-500 hover:bg-black/60'
+                }`}
+              >
+                {encryptionMode === 'quantum' && (
+                  <div className="absolute top-3 right-3">
+                    <CheckCircle2 className="w-5 h-5 text-[#00e5ff]" />
+                  </div>
+                )}
+                <div className="flex items-center gap-3 mb-2">
+                  <div className={`p-2 rounded-lg ${
+                    encryptionMode === 'quantum' ? 'bg-[#00e5ff]/20' : 'bg-gray-800'
+                  }`}>
+                    <Lock className={`w-5 h-5 ${encryptionMode === 'quantum' ? 'text-[#00e5ff]' : 'text-gray-400'}`} />
+                  </div>
+                  <span className={`text-sm font-bold uppercase tracking-wider ${
+                    encryptionMode === 'quantum' ? 'text-[#00e5ff]' : 'text-gray-300'
+                  }`}>
+                    Quantum-Encrypted
+                  </span>
+                </div>
+                <p className="text-[11px] text-gray-400 leading-relaxed">
+                  Full <strong className="text-white">ML-KEM-768 + ML-DSA-65</strong> protection. Lattice-based key encapsulation, AES-256-GCM encryption, and post-quantum digital signatures.
+                  Laptop C <span className="text-green-400 font-bold">CANNOT tamper</span> with this stream.
+                </p>
+              </button>
+
+              {/* OPTION 1: Standard / Unencrypted */}
+              <button
+                onClick={() => setEncryptionMode('standard')}
+                className={`relative p-5 rounded-xl border-2 text-left transition-all duration-300 group ${
+                  encryptionMode === 'standard'
+                    ? 'border-amber-500 bg-amber-500/10 shadow-lg shadow-amber-500/10'
+                    : 'border-gray-700 bg-black/40 hover:border-gray-500 hover:bg-black/60'
+                }`}
+              >
+                {encryptionMode === 'standard' && (
+                  <div className="absolute top-3 right-3">
+                    <CheckCircle2 className="w-5 h-5 text-amber-400" />
+                  </div>
+                )}
+                <div className="flex items-center gap-3 mb-2">
+                  <div className={`p-2 rounded-lg ${
+                    encryptionMode === 'standard' ? 'bg-amber-500/20' : 'bg-gray-800'
+                  }`}>
+                    <Unlock className={`w-5 h-5 ${encryptionMode === 'standard' ? 'text-amber-400' : 'text-gray-400'}`} />
+                  </div>
+                  <span className={`text-sm font-bold uppercase tracking-wider ${
+                    encryptionMode === 'standard' ? 'text-amber-400' : 'text-gray-300'
+                  }`}>
+                    Standard / Unencrypted
+                  </span>
+                </div>
+                <p className="text-[11px] text-gray-400 leading-relaxed">
+                  Raw file bytes transmitted <strong className="text-white">without any cryptographic protection</strong>. No ML-KEM, no ML-DSA, no AES-GCM.
+                  Laptop C <span className="text-red-400 font-bold">CAN read, tamper, and corrupt</span> this stream.
+                </p>
+              </button>
+            </div>
+
+            {encryptionMode === 'standard' && (
+              <div className="p-3 rounded-lg bg-amber-950/30 border border-amber-500/40 text-xs font-mono text-amber-300 flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+                <span>
+                  <strong>DEMO WARNING:</strong> Selecting Standard mode intentionally removes all quantum-resilient cryptographic protection.
+                  This allows Laptop C (Attacker) to intercept, read plaintext payload, corrupt ciphertext bits, and alter sensitivity classifications in-flight.
+                  Use this mode to demonstrate what happens <em>without</em> Quantum Shield protection.
+                </span>
+              </div>
+            )}
+          </div>
+
           {/* TARGET RECEIVER SELECTION & MITM TOGGLE */}
           <div className="grid lg:grid-cols-3 gap-6">
 
@@ -886,7 +1017,7 @@ export default function LanSharingDashboard({
                   <Send className="w-5 h-5 text-[#00e5ff]" /> Transmit Post-Quantum Document Envelope
                 </h3>
                 <p className="text-xs text-gray-400 mt-1">
-                  File: <span className="text-[#00e5ff] font-mono font-bold">{fileMeta?.name || 'quantum_document.pdf'}</span> | Sensitivity: <span className="text-white font-mono">{classification?.label || 'PUBLIC'}</span> | PQC Suite: <span className="text-white font-mono">{securityDecision.algorithms}</span>
+                  File: <span className="text-[#00e5ff] font-mono font-bold">{fileMeta?.name || 'quantum_document.pdf'}</span> | Sensitivity: <span className="text-white font-mono">{classification?.label || 'PUBLIC'}</span> | Mode: <span className={`font-mono font-bold ${encryptionMode === 'quantum' ? 'text-[#00e5ff]' : 'text-amber-400'}`}>{encryptionMode === 'quantum' ? securityDecision.algorithms : 'Standard (Unencrypted)'}</span>
                 </p>
               </div>
 
@@ -1161,6 +1292,14 @@ export default function LanSharingDashboard({
                             }`}>
                             {pkg.classification?.label || 'PUBLIC'}
                           </span>
+                          {/* PQC / Standard Mode Badge */}
+                          <span className={`px-2.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase border ${
+                            (pkg.kemCiphertextHex && pkg.signature)
+                              ? 'bg-[#00e5ff]/10 border-[#00e5ff]/50 text-[#00e5ff]'
+                              : 'bg-amber-500/10 border-amber-500/50 text-amber-400'
+                          }`}>
+                            {(pkg.kemCiphertextHex && pkg.signature) ? '🔒 Quantum-Encrypted' : '⚠️ Unencrypted'}
+                          </span>
                         </h4>
                       </div>
 
@@ -1227,8 +1366,8 @@ export default function LanSharingDashboard({
                           </div>
                         ) : (
                           <div className="space-y-2 text-red-400">
-                            <p className="text-[11px] font-bold">❌ SHA-256 Hash Mismatch</p>
-                            <p className="text-[10px] text-red-300 leading-tight">Payload ciphertext modified in transit over LAN!</p>
+                            <p className="text-[11px] font-bold">❌ {(pkg.kemCiphertextHex && pkg.signature) ? 'SHA-256 Hash Mismatch — Attack BLOCKED by ML-DSA' : 'File Stream Corrupted! Tampering Detected in Unencrypted Transfer'}</p>
+                            <p className="text-[10px] text-red-300 leading-tight">{(pkg.kemCiphertextHex && pkg.signature) ? 'PQC signature verification rejected the tampered payload. Quantum Shield protection was active.' : '[WARNING] File was sent WITHOUT quantum encryption. Laptop C successfully intercepted and corrupted the payload in transit.'}</p>
                           </div>
                         )}
                       </div>
@@ -1332,7 +1471,10 @@ export default function LanSharingDashboard({
                   ) : (
                     <>
                       <AlertCircle className="w-4 h-4 text-red-400" />
-                      <span>TAMPERED PAYLOAD DETECTED — SIGNATURE / CIPHERTEXT MODIFIED IN TRANSIT</span>
+                      <span>{(selectedDocModal.package.kemCiphertextHex && selectedDocModal.package.signature)
+                        ? 'TAMPERED PAYLOAD DETECTED — ATTACK BLOCKED BY ML-DSA SIGNATURE VERIFICATION'
+                        : '[WARNING] FILE STREAM CORRUPTED — TAMPERING DETECTED IN UNENCRYPTED TRANSFER'
+                      }</span>
                     </>
                   )}
                 </div>

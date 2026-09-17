@@ -210,9 +210,20 @@ const transmitPackage = async (req, res) => {
                 const corruptedFingerprint = 'ff9999deadbeef' + originalFingerprint.substring(14);
                 const tamperedLabel = originalLabel === 'PII' ? 'PUBLIC' : (originalLabel === 'FINANCIAL' ? 'PUBLIC' : 'UNCLASSIFIED');
 
+                let corruptedText = finalPackage.documentText;
+                if (corruptedText) {
+                    corruptedText = `[CORRUPTED BY MITM ADVERSARY (UNENCRYPTED STREAM)]\n` + corruptedText;
+                }
+                let corruptedBase64 = finalPackage.fileBase64;
+                if (corruptedBase64 && corruptedBase64.length > 40) {
+                    corruptedBase64 = corruptedBase64.substring(0, corruptedBase64.length - 20) + 'BAD9999CORRUPTED==';
+                }
+
                 finalPackage = {
                     ...finalPackage,
                     ciphertextHex: corruptedCiphertext,
+                    documentText: corruptedText,
+                    fileBase64: corruptedBase64,
                     fingerprint: corruptedFingerprint,
                     classification: { ...finalPackage.classification, label: tamperedLabel },
                     tamperedByMitm: true
@@ -438,9 +449,20 @@ const forwardInterceptedPackage = async (req, res) => {
                 const originalCiphertext = pkgToSend.ciphertextHex || '';
                 const tamperedLabel = originalLabel === 'PII' ? 'PUBLIC' : (originalLabel === 'FINANCIAL' ? 'PUBLIC' : 'UNCLASSIFIED');
 
+                let corruptedText = pkgToSend.documentText;
+                if (corruptedText) {
+                    corruptedText = `[CORRUPTED BY ADVERSARY NODE C (UNENCRYPTED TRANSFER)]\n` + corruptedText;
+                }
+                let corruptedBase64 = pkgToSend.fileBase64;
+                if (corruptedBase64 && corruptedBase64.length > 40) {
+                    corruptedBase64 = corruptedBase64.substring(0, corruptedBase64.length - 20) + 'BAD9999CORRUPTED==';
+                }
+
                 pkgToSend = {
                     ...pkgToSend,
                     ciphertextHex: originalCiphertext.substring(0, 10) + 'BAD9999' + originalCiphertext.substring(17),
+                    documentText: corruptedText,
+                    fileBase64: corruptedBase64,
                     fingerprint: 'ff9999deadbeef' + originalFingerprint.substring(14),
                     classification: { ...pkgToSend.classification, label: tamperedLabel },
                     tamperedByMitm: true
