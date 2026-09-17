@@ -345,7 +345,13 @@ export default function LanSharingDashboard({
       }
 
       log(`[Throttled Streaming] Applying ${chunkDelaySec}s chunk delay to expose observable interception window...`);
-      log(`Transmitting post-quantum document envelope to destination ${targetIp || 'Local Inbox'}...`);
+      const effectiveGateway = (enableGatewayRouting || (gatewayIp && gatewayIp.trim() !== '')) ? gatewayIp.trim() : '';
+
+      if (effectiveGateway) {
+        log(`🚨 Dispatching stream via Attacker Node C (${effectiveGateway}) ➔ Target Laptop B (${targetIp || 'Receiver'})...`);
+      } else {
+        log(`Transmitting post-quantum document envelope directly to destination ${targetIp || 'Local Inbox'}...`);
+      }
 
       const res = await fetch('/api/transmit', {
         method: 'POST',
@@ -353,7 +359,7 @@ export default function LanSharingDashboard({
         body: JSON.stringify({
           targetIp,
           targetPort,
-          gatewayIp: enableGatewayRouting ? gatewayIp : '',
+          gatewayIp: effectiveGateway,
           packageData,
           mitmTamperEnabled: mitmEnabled,
           chunkDelaySec
@@ -736,38 +742,53 @@ export default function LanSharingDashboard({
                 🌐 <strong>Cross-Network Tip:</strong> Works across different Wi-Fi networks! Enter the receiver's <span className="text-purple-400 font-bold">Tailscale IP (100.x.x.x)</span>, a public tunnel URL (<span className="text-cyan-400 font-bold">https://...</span>), or same-router LAN IP (<span className="text-green-400 font-bold">192.168.x.x</span>).
               </p>
 
-              {/* ADVERSARY GATEWAY ROUTING (Laptop C Intermediary) */}
-              <div className="bg-black/40 p-4 rounded-xl border border-gray-800 space-y-3 mt-4">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold uppercase tracking-wider text-gray-300 flex items-center gap-2">
-                    <ShieldAlert className="w-4 h-4 text-red-400" /> Simulate Compromised Route (Laptop C Interceptor)
-                  </label>
+              {/* 3-NODE INTERCEPTION ROUTING (ROUTE VIA LAPTOP C) */}
+              <div className={`p-4 rounded-xl border transition-all space-y-3 mt-4 ${
+                enableGatewayRouting || (gatewayIp && gatewayIp.trim() !== '')
+                  ? 'bg-red-950/20 border-red-500/80 shadow-lg glow-red'
+                  : 'bg-black/40 border-gray-800'
+              }`}>
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+                  <div>
+                    <label className="text-xs font-bold uppercase tracking-wider flex items-center gap-2 text-white">
+                      <ShieldAlert className="w-4 h-4 text-red-400" />
+                      3-Node Attack Pipeline: Route via Laptop C (Attacker Sniffer)
+                    </label>
+                    <p className="text-[11px] text-gray-400 font-mono mt-0.5">
+                      Send to Laptop B, but route traffic through Laptop C so Eve can intercept & tamper in-flight.
+                    </p>
+                  </div>
                   <button
                     onClick={() => setEnableGatewayRouting(!enableGatewayRouting)}
-                    className={`px-3 py-1 text-[11px] font-mono font-bold rounded-lg border transition-all ${
+                    className={`px-3.5 py-1.5 text-xs font-mono font-bold rounded-lg border transition-all flex-shrink-0 ${
                       enableGatewayRouting 
-                        ? 'bg-red-600/30 border-red-500 text-red-300 glow-red' 
-                        : 'bg-gray-800 border-gray-700 text-gray-400'
+                        ? 'bg-red-600 text-white border-red-400 shadow glow-red animate-pulse' 
+                        : 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-300'
                     }`}
                   >
-                    {enableGatewayRouting ? '🚨 Active: Routing via Laptop C' : 'Direct to Laptop B'}
+                    {enableGatewayRouting ? '🚨 Active: Routing via Laptop C' : 'Click to Route via Laptop C'}
                   </button>
                 </div>
 
-                {enableGatewayRouting && (
-                  <div className="animate-in fade-in space-y-2">
-                    <label className="text-[10px] text-red-400 uppercase font-mono block">
-                      Attacker Node C IP (Compromised Router / Intermediary Eve)
+                {(enableGatewayRouting || (gatewayIp && gatewayIp.trim() !== '')) && (
+                  <div className="animate-in fade-in space-y-2 pt-2 border-t border-red-900/40">
+                    <label className="text-[11px] text-red-300 font-bold uppercase font-mono block">
+                      Laptop C (Attacker Node) IP Address:
                     </label>
-                    <input
-                      type="text"
-                      value={gatewayIp}
-                      onChange={(e) => setGatewayIp(e.target.value)}
-                      placeholder="e.g. 10.0.9.36 (Laptop C's IP)"
-                      className="w-full bg-black/80 border border-red-500/60 rounded-lg p-2.5 text-white font-mono text-xs focus:border-red-400 focus:outline-none"
-                    />
-                    <p className="text-[10px] text-gray-400 font-mono">
-                      💡 <strong>Real MITM Simulation:</strong> The document is addressed directly to <strong>Laptop B ({targetIp || 'Receiver'})</strong>, but network traffic hops through <strong>Laptop C</strong>, allowing Eve to intercept and attack in flight!
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={gatewayIp}
+                        onChange={(e) => {
+                          setGatewayIp(e.target.value);
+                          if (!enableGatewayRouting) setEnableGatewayRouting(true);
+                        }}
+                        placeholder="e.g. 10.0.8.66 (Laptop C's IP shown on its screen)"
+                        className="flex-1 bg-black/80 border-2 border-red-500 rounded-lg p-2.5 text-white font-mono text-xs focus:outline-none focus:border-red-400"
+                      />
+                    </div>
+                    <p className="text-[10px] text-gray-300 font-mono">
+                      👉 <strong>3-Laptop Setup:</strong> Enter <strong>Laptop C's Primary IP (e.g. 10.0.8.66)</strong> here. When you click Transmit, Laptop A will dispatch the envelope to Laptop C, Laptop C's sniffer will capture it live, and Eve can click <em>Attempt Bit-Flip Attack</em> to forward it to Laptop B!
                     </p>
                   </div>
                 )}

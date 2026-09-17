@@ -308,18 +308,17 @@ const transmitPackage = async (req, res) => {
             inbox.unshift(entry);
             if (inbox.length > 50) inbox = inbox.slice(0, 50);
 
-            // If intercepted here (Laptop C acting as MITM), run attack detection & alert
-            if (isInterceptedTraffic) {
-                attackTerminalLog(`[ATTACK STATUS] Active File Transfer Detected (${entry.senderIp} -> ${entry.intendedTarget})`);
-                if (pqcProtected) {
-                    attackTerminalLog(`[ATTACK FAILED] Target file is Quantum-Encrypted. Cannot disrupt payload.`);
-                    attackTerminalLog(`[ATTACK FAILED] PQC Suite: ${packageData.algorithms || 'ML-KEM + ML-DSA'}`);
-                    attackTerminalLog(`[ATTACK FAILED] ML-DSA signature will detect any modification. Forwarding intact.`);
-                } else {
-                    attackTerminalLog(`[ATTACK STATUS] Target file is UNENCRYPTED — payload is readable and alterable.`);
-                }
-                broadcastIntrusionAlert(netInfo.ip, entry.intendedTarget, entry.senderIp, entry.id, pqcProtected);
+            // Active stream detection & intrusion alert logging
+            const displayTarget = entry.intendedTarget || entry.targetIp || 'Local Inbox';
+            attackTerminalLog(`[ATTACK STATUS] Active File Transfer Detected (${entry.senderIp} -> ${displayTarget})`);
+            if (pqcProtected) {
+                attackTerminalLog(`[ATTACK FAILED] Target file is Quantum-Encrypted. Cannot disrupt payload.`);
+                attackTerminalLog(`[ATTACK FAILED] PQC Suite: ${packageData.algorithms || 'ML-KEM + ML-DSA'}`);
+                attackTerminalLog(`[ATTACK FAILED] ML-DSA signature will detect any modification. Forwarding intact.`);
+            } else {
+                attackTerminalLog(`[ATTACK STATUS] Target file is UNENCRYPTED — payload is readable and alterable.`);
             }
+            broadcastIntrusionAlert(netInfo.ip, displayTarget, entry.senderIp, entry.id, pqcProtected);
 
             return res.json({
                 success: true,
