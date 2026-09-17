@@ -555,7 +555,7 @@ const clearInbox = (req, res) => {
 // POST /api/identity
 const registerIdentity = (req, res) => {
     try {
-        const { kemPublicKeyHex, sigPublicKeyHex, kemLabel, sigLabel } = req.body;
+        const { kemPublicKeyHex, sigPublicKeyHex, kemLabel, sigLabel, keysBySuite } = req.body;
         if (!kemPublicKeyHex || !sigPublicKeyHex) {
             return res.status(400).json({ success: false, message: "Missing public keys in identity payload." });
         }
@@ -564,9 +564,10 @@ const registerIdentity = (req, res) => {
             sigPublicKeyHex,
             kemLabel,
             sigLabel,
+            keysBySuite: keysBySuite || {},
             registeredAt: new Date().toISOString()
         };
-        console.log(`[PQC Identity] Registered node public identity (${kemLabel} / ${sigLabel})`);
+        console.log(`[PQC Identity] Registered node public identity (${kemLabel} / ${sigLabel}) with multi-tier suites:`, Object.keys(nodeIdentity.keysBySuite));
         return res.json({ success: true, message: "Node PQC identity registered successfully.", identity: nodeIdentity });
     } catch (err) {
         console.error("Identity Registration Error:", err);

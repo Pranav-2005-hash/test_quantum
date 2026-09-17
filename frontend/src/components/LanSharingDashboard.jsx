@@ -62,7 +62,13 @@ export default function LanSharingDashboard({
             kemPublicKeyHex: bytesToHex(id.kemPublicKey),
             sigPublicKeyHex: bytesToHex(id.sigPublicKey),
             kemLabel: id.kemLabel,
-            sigLabel: id.sigLabel
+            sigLabel: id.sigLabel,
+            keysBySuite: {
+              'HQC-128': bytesToHex(id.multiKeys?.['HQC-128']?.pk),
+              'HQC-192': bytesToHex(id.multiKeys?.['HQC-192']?.pk),
+              'HQC-256': bytesToHex(id.multiKeys?.['HQC-256']?.pk),
+              'Classic McEliece': bytesToHex(id.multiKeys?.['Classic McEliece']?.pk)
+            }
           })
         }).catch(err => console.log("Identity register notice:", err.message));
       } catch (e) {
@@ -258,9 +264,15 @@ export default function LanSharingDashboard({
         const idRes = await fetch(targetIdentityUrl, { signal: AbortSignal.timeout(3000) });
         const idData = await idRes.json();
         if (idData?.success && idData?.identity?.kemPublicKeyHex) {
-          targetKemPkHex = idData.identity.kemPublicKeyHex;
+          const { kemLabel } = parseAlgorithmString(securityDecision.algorithms);
+          if (idData.identity.keysBySuite && idData.identity.keysBySuite[kemLabel]) {
+            targetKemPkHex = idData.identity.keysBySuite[kemLabel];
+            log(`✅ Verified Target Receiver Public Key for ${kemLabel}.`);
+          } else {
+            targetKemPkHex = idData.identity.kemPublicKeyHex;
+            log(`✅ Verified Target Receiver Public Key.`);
+          }
           targetSigPkHex = idData.identity.sigPublicKeyHex;
-          log(`✅ Verified Target Receiver Public Key.`);
         } else {
           log(`Notice: Target has not registered key identity yet; using loopback public key.`);
         }
@@ -283,9 +295,12 @@ export default function LanSharingDashboard({
       log(`Signature (${sigBytes.length} bytes): ${signatureHex.substring(0, 16)}...`);
       await new Promise(r => setTimeout(r, 150));
 
-      log(`Encapsulating shared secret against target's ${kemLabel} public key...`);
+      log(`Encapsulating shared secret against target's public key...`);
       const targetKemPkBytes = hexToBytes(targetKemPkHex);
       const encResult = encapsulate(targetKemPkBytes, kemAlgo);
+      if (encResult.actualKemLabel && encResult.actualKemLabel !== kemLabel) {
+        log(`ℹ️ Auto-negotiated KEM suite to ${encResult.actualKemLabel} matching Target public key (${targetKemPkBytes.length} bytes).`);
+      }
       const kemCiphertextHex = bytesToHex(encResult.ciphertext);
 
       log(`Encrypting payload using AES-256-GCM (ML-KEM Shared Secret)...`);
@@ -403,9 +418,9 @@ export default function LanSharingDashboard({
         let sharedSecret;
         if (pkg.kemCiphertextHex) {
           const kemCtBytes = hexToBytes(pkg.kemCiphertextHex);
-          sharedSecret = decapsulate(kemCtBytes, nodeIdentityState.kemSecretKey, kemAlgo);
+          sharedSecret = decapsulate(kemCtBytes, nodeIdentityState.kemSecretKey, kemAlgo, nodeIdentityState.multiKeys);
         } else {
-          sharedSecret = decapsulate(aesCtBytes, nodeIdentityState.kemSecretKey, kemAlgo);
+          sharedSecret = decapsulate(aesCtBytes, nodeIdentityState.kemSecretKey, kemAlgo, nodeIdentityState.multiKeys);
         }
 
         await aesGcmDecrypt(aesCtBytes, ivBytes, sharedSecret);

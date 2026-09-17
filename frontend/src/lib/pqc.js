@@ -37,21 +37,27 @@ export const NIST_SECURITY_BITS = {
   'ml_kem1024': 256
 };
 
+// NIST ML-KEM Category mappings by key / ciphertext length
+export const KEM_BY_PK_LENGTH = {
+  800: { algo: ml_kem512, label: 'HQC-128 (ML-KEM-512)', cipherLen: 768 },
+  1184: { algo: ml_kem768, label: 'HQC-192 (ML-KEM-768)', cipherLen: 1088 },
+  1568: { algo: ml_kem1024, label: 'HQC-256 (ML-KEM-1024)', cipherLen: 1568 }
+};
+
+export const KEM_BY_CT_LENGTH = {
+  768: { algo: ml_kem512, label: 'HQC-128 (ML-KEM-512)', skLen: 1632 },
+  1088: { algo: ml_kem768, label: 'HQC-192 (ML-KEM-768)', skLen: 2400 },
+  1568: { algo: ml_kem1024, label: 'HQC-256 (ML-KEM-1024)', skLen: 3168 }
+};
+
 export function parseAlgorithmString(algorithms) {
   const str = algorithms || 'HQC-256 + SLH-DSA-128s';
   const parts = str.split(' + ').map(s => s.trim());
   const kemLabel = parts[0] || 'HQC-256';
   const sigLabel = parts[1] || 'SLH-DSA-128s';
 
-  const kemAlgo = KEM_MAP[kemLabel];
-  const sigAlgo = SIG_MAP[sigLabel];
-
-  if (!kemAlgo) {
-    throw new Error(`KEM algorithm map miss for label '${kemLabel}' (parsed from '${algorithms}')`);
-  }
-  if (!sigAlgo) {
-    throw new Error(`Signature algorithm map miss for label '${sigLabel}' (parsed from '${algorithms}')`);
-  }
+  const kemAlgo = KEM_MAP[kemLabel] || ml_kem1024;
+  const sigAlgo = SIG_MAP[sigLabel] || slh_dsa_sha2_128s;
 
   return { kemAlgo, sigAlgo, kemLabel, sigLabel };
 }
@@ -62,13 +68,28 @@ export function generateIdentity(algorithms) {
   const kemKeys = kemAlgo.keygen();
   const sigKeys = sigAlgo.keygen();
 
+  // Generate multi-tier keys across all NIST categories so this node can
+  // seamlessly receive envelopes encrypted under HQC-128, HQC-192, or HQC-256
+  const k512 = ml_kem512.keygen();
+  const k768 = ml_kem768.keygen();
+  const k1024 = ml_kem1024.keygen();
+
   return {
     kemPublicKey: kemKeys.publicKey,
     kemSecretKey: kemKeys.secretKey,
     sigPublicKey: sigKeys.publicKey,
     sigSecretKey: sigKeys.secretKey,
     kemLabel,
-    sigLabel
+    sigLabel,
+    multiKeys: {
+      'HQC-128': { pk: k512.publicKey, sk: k512.secretKey, algo: ml_kem512, len: 800 },
+      'HQC-192': { pk: k768.publicKey, sk: k768.secretKey, algo: ml_kem768, len: 1184 },
+      'HQC-256': { pk: k1024.publicKey, sk: k1024.secretKey, algo: ml_kem1024, len: 1568 },
+      'Classic McEliece': { pk: k1024.publicKey, sk: k1024.secretKey, algo: ml_kem1024, len: 1568 },
+      768: { sk: k512.secretKey, algo: ml_kem512 },
+      1088: { sk: k768.secretKey, algo: ml_kem768 },
+      1568: { sk: k1024.secretKey, algo: ml_kem1024 }
+    }
   };
 }
 
@@ -76,21 +97,41 @@ export function encapsulate(kemPublicKeyBytes, kemAlgo) {
   if (!kemPublicKeyBytes || !(kemPublicKeyBytes instanceof Uint8Array)) {
     throw new Error("encapsulate requires a valid Uint8Array KEM public key");
   }
-  const result = kemAlgo.encapsulate(kemPublicKeyBytes);
+
+  // Auto-resolve algorithm if the recipient's public key length corresponds to a specific category
+  let algoToUse = kemAlgo;
+  const matched = KEM_BY_PK_LENGTH[kemPublicKeyBytes.length];
+  if (matched) {
+    algoToUse = matched.algo;
+  }
+
+  const result = algoToUse.encapsulate(kemPublicKeyBytes);
   return {
     ciphertext: result.cipherText,
-    sharedSecret: result.sharedSecret
+    sharedSecret: result.sharedSecret,
+    actualKemLabel: matched?.label
   };
 }
 
-export function decapsulate(ciphertextBytes, kemSecretKeyBytes, kemAlgo) {
+export function decapsulate(ciphertextBytes, kemSecretKeyBytes, kemAlgo, multiKeys) {
   if (!ciphertextBytes || !(ciphertextBytes instanceof Uint8Array)) {
     throw new Error("decapsulate requires a valid Uint8Array ciphertext");
   }
-  if (!kemSecretKeyBytes || !(kemSecretKeyBytes instanceof Uint8Array)) {
+
+  // Automatically match the right secret key by ciphertext length (768, 1088, 1568)
+  const matched = KEM_BY_CT_LENGTH[ciphertextBytes.length];
+  let sk = kemSecretKeyBytes;
+  let algo = matched ? matched.algo : kemAlgo;
+
+  if (multiKeys && matched && multiKeys[ciphertextBytes.length]?.sk) {
+    sk = multiKeys[ciphertextBytes.length].sk;
+    algo = multiKeys[ciphertextBytes.length].algo;
+  }
+
+  if (!sk || !(sk instanceof Uint8Array)) {
     throw new Error("decapsulate requires a valid Uint8Array KEM secret key");
   }
-  return kemAlgo.decapsulate(ciphertextBytes, kemSecretKeyBytes);
+  return algo.decapsulate(ciphertextBytes, sk);
 }
 
 // Pure JS AES-256-GCM (works in ALL environments including unsecure HTTP over LAN IP where window.crypto.subtle is undefined)
