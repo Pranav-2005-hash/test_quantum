@@ -79,6 +79,11 @@ export default function LanSharingDashboard({
   const [decryptedStateMap, setDecryptedStateMap] = useState({}); // pkgId -> { verified: boolean, hash: string, text: string }
   const [verifyingId, setVerifyingId] = useState(null);
 
+  // Transmission Timing & Intrusion Telemetry
+  const [chunkDelaySec, setChunkDelaySec] = useState(0.8);
+  const [activeIntrusionAlert, setActiveIntrusionAlert] = useState(null);
+  const [attackLogs, setAttackLogs] = useState([]);
+
   // Document Reader Modal State
   const [selectedDocModal, setSelectedDocModal] = useState(null); // item object
 
@@ -114,15 +119,20 @@ export default function LanSharingDashboard({
     return res;
   };
 
-  // Poll Inbox when active
+  // Poll Inbox, Alerts, and Attacker Logs when active
   useEffect(() => {
     let interval = null;
     let timer = null;
 
     if (isPolling) {
       fetchInbox();
+      fetchAlerts();
+      fetchAttackLog();
+
       interval = setInterval(() => {
         fetchInbox();
+        fetchAlerts();
+        fetchAttackLog();
         setPollCountdown(2);
       }, 2000);
 
@@ -147,6 +157,31 @@ export default function LanSharingDashboard({
       }
     } catch (err) {
       console.error("Inbox poll error:", err);
+    }
+  };
+
+  const fetchAlerts = async () => {
+    try {
+      const res = await fetch('/api/alerts');
+      const data = await res.json();
+      if (data.success && data.alerts && data.alerts.length > 0) {
+        // Trigger alert banner on nodes
+        setActiveIntrusionAlert(data.alerts[0]);
+      }
+    } catch (err) {
+      // silent
+    }
+  };
+
+  const fetchAttackLog = async () => {
+    try {
+      const res = await fetch('/api/attack-log');
+      const data = await res.json();
+      if (data.success && data.log) {
+        setAttackLogs(data.log);
+      }
+    } catch (err) {
+      // silent
     }
   };
 
@@ -294,6 +329,7 @@ export default function LanSharingDashboard({
         await new Promise(r => setTimeout(r, 300));
       }
 
+      log(`[Throttled Streaming] Applying ${chunkDelaySec}s chunk delay to expose observable interception window...`);
       log(`Transmitting post-quantum document envelope to destination ${targetIp || 'Local Inbox'}...`);
 
       const res = await fetch('/api/transmit', {
@@ -304,7 +340,8 @@ export default function LanSharingDashboard({
           targetPort,
           gatewayIp: enableGatewayRouting ? gatewayIp : '',
           packageData,
-          mitmTamperEnabled: mitmEnabled
+          mitmTamperEnabled: mitmEnabled,
+          chunkDelaySec
         })
       });
 
@@ -417,7 +454,6 @@ export default function LanSharingDashboard({
   const handleAttackerForward = async (item, tamper) => {
     try {
       const dest = item.intendedTarget || targetIp;
-      log(`[Attacker C] ${tamper ? '🚨 Injecting corruption into' : '⚡ Forwarding clean'} package ${item.id} to Laptop B (${dest})...`);
       const res = await fetch('/api/intercept/forward', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -432,6 +468,8 @@ export default function LanSharingDashboard({
       if (data.success) {
         alert(data.message);
         fetchInbox();
+        fetchAttackLog();
+        fetchAlerts();
       } else {
         alert(`Forward Error: ${data.message}`);
       }
@@ -477,7 +515,52 @@ export default function LanSharingDashboard({
   };
 
   return (
-    <div className="space-y-10 font-sans">
+    <div className="space-y-8 font-sans">
+
+      {/* REAL-TIME INTRUSION ALERT BANNER (BROADCAST FROM LAPTOP C) */}
+      <AnimatePresence>
+        {activeIntrusionAlert && (
+          <motion.div
+            initial={{ opacity: 0, y: -20, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -20, scale: 0.98 }}
+            className="p-5 rounded-2xl bg-red-950/90 border-2 border-red-500 shadow-2xl glow-red flex flex-col md:flex-row items-start md:items-center justify-between gap-4 text-white"
+          >
+            <div className="flex items-start md:items-center gap-3.5">
+              <div className="p-3 bg-red-600 rounded-xl animate-pulse flex-shrink-0">
+                <AlertTriangle className="w-6 h-6 text-white" />
+              </div>
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-black text-sm uppercase tracking-wider text-red-300">
+                    [SECURITY ALERT] Unauthorized Intrusion / Interception Attempt Detected!
+                  </span>
+                  <span className="px-2 py-0.5 bg-red-500/30 text-red-200 text-[10px] font-mono rounded border border-red-500/50">
+                    LIVE MITM SNIFFER DETECTED
+                  </span>
+                </div>
+                <p className="text-xs text-red-200 font-mono">
+                  Adversary Laptop C (IP: <strong className="text-yellow-300">{activeIntrusionAlert.attackerIp}</strong>) intercepted active transmission stream: Sender <strong className="text-cyan-300">{activeIntrusionAlert.senderIp}</strong> ➔ Target <strong className="text-purple-300">{activeIntrusionAlert.targetIp}</strong>.
+                </p>
+                {activeIntrusionAlert.pqcProtected && (
+                  <p className="text-xs text-green-300 font-mono font-bold flex items-center gap-1.5 pt-0.5">
+                    <ShieldCheck className="w-4 h-4 text-green-400 flex-shrink-0" />
+                    Quantum Shield Active: ML-KEM lattice ciphertext remains uncrackable. ML-DSA signature will reject any altered payload at Laptop B.
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-2 self-end md:self-auto flex-shrink-0">
+              <button
+                onClick={() => setActiveIntrusionAlert(null)}
+                className="px-4 py-2 bg-red-900/60 hover:bg-red-800 text-red-100 text-xs font-bold uppercase rounded-lg border border-red-500 transition-all shadow"
+              >
+                Acknowledge Alert
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* HEADER BAR WITH LOCAL NODE INTELLIGENCE */}
       <div className="glass-card rounded-2xl p-6 md:p-8 border border-gray-800 relative overflow-hidden">
@@ -715,6 +798,52 @@ export default function LanSharingDashboard({
 
           {/* TRANSMISSION CONTROL PANEL */}
           <div className="glass-card rounded-2xl p-6 md:p-8 border border-gray-800 space-y-6">
+            {/* TRANSMISSION TIMING & STREAMING DELAY PARAMETER */}
+            <div className="bg-black/40 p-4 rounded-xl border border-gray-800 space-y-3">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                <div className="space-y-0.5">
+                  <label className="text-xs font-bold uppercase tracking-wider text-gray-300 flex items-center gap-2">
+                    <Zap className="w-4 h-4 text-[#00e5ff]" /> Transmission Delay Parameter (`chunk_delay_sec`)
+                  </label>
+                  <p className="text-[11px] text-gray-400 font-mono">
+                    Throttles streaming chunks to give Laptop C an observable window to capture, sniff, and inspect in real time.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 font-mono text-xs">
+                  <span className="text-[#00e5ff] font-bold bg-[#00e5ff]/10 px-2.5 py-1 rounded border border-[#00e5ff]/30">
+                    {chunkDelaySec.toFixed(1)}s Delay / Chunk
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-4 pt-1">
+                <input
+                  type="range"
+                  min="0.1"
+                  max="3.0"
+                  step="0.1"
+                  value={chunkDelaySec}
+                  onChange={(e) => setChunkDelaySec(parseFloat(e.target.value))}
+                  className="w-full accent-[#00e5ff] cursor-pointer"
+                />
+                <div className="flex gap-1.5 flex-shrink-0">
+                  {[0.2, 0.8, 1.5, 2.5].map((val) => (
+                    <button
+                      key={val}
+                      onClick={() => setChunkDelaySec(val)}
+                      className={`px-2 py-1 text-[10px] font-mono rounded border transition-all ${
+                        chunkDelaySec === val 
+                          ? 'bg-[#00e5ff]/20 text-[#00e5ff] border-[#00e5ff]' 
+                          : 'bg-black/60 text-gray-400 border-gray-800 hover:text-white'
+                      }`}
+                    >
+                      {val}s
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
             <div className="flex justify-between items-center border-b border-gray-800 pb-4">
               <div>
                 <h3 className="text-xl font-bold text-white flex items-center gap-2">
@@ -778,6 +907,49 @@ export default function LanSharingDashboard({
               </div>
             </div>
 
+            {/* ADVERSARY LIVE SNIFFER TERMINAL */}
+            <div className="bg-black/90 rounded-xl p-4 border border-red-500/50 font-mono text-xs max-h-56 overflow-y-auto custom-scrollbar space-y-1">
+              <div className="text-gray-500 border-b border-gray-800 pb-1.5 flex justify-between items-center text-[11px]">
+                <span className="flex items-center gap-1.5 text-red-400 font-bold">
+                  <Radio className="w-3.5 h-3.5 animate-pulse text-red-500" />
+                  root@laptop-c-adversary:~# ./pqc-interceptor --promiscuous --sniff-stream
+                </span>
+                <span className="text-[10px] text-green-400 font-bold bg-green-950/40 px-2 py-0.5 rounded border border-green-800">
+                  ● SNIFFER ACTIVE
+                </span>
+              </div>
+              {attackLogs.length === 0 ? (
+                <div className="text-gray-500 italic py-2">
+                  [IDLE] Listening for active file transfer sockets between Laptop A and B...
+                </div>
+              ) : (
+                attackLogs.map((entry, idx) => {
+                  const isFail = entry.includes('FAILED');
+                  const isStatus = entry.includes('STATUS');
+                  const isSuccess = entry.includes('SUCCESS');
+                  const isBroadcast = entry.includes('BROADCAST');
+                  return (
+                    <div
+                      key={idx}
+                      className={`leading-relaxed ${
+                        isFail
+                          ? 'text-yellow-400 font-bold bg-yellow-950/20 px-1 rounded'
+                          : isSuccess
+                          ? 'text-red-400 font-bold'
+                          : isStatus
+                          ? 'text-cyan-300'
+                          : isBroadcast
+                          ? 'text-purple-300'
+                          : 'text-gray-300'
+                      }`}
+                    >
+                      {entry}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
             {inboxItems.length === 0 ? (
               <div className="p-12 text-center text-gray-500 font-mono text-sm space-y-2">
                 <ShieldAlert className="w-12 h-12 mx-auto text-red-500/40 animate-bounce" />
@@ -790,13 +962,23 @@ export default function LanSharingDashboard({
               <div className="space-y-4">
                 {inboxItems.map((item) => {
                   const pkg = item.package;
+                  const isPqc = item.pqcProtected || !!(pkg.kemCiphertextHex && pkg.signature);
                   return (
                     <div key={item.id} className="bg-black/60 rounded-xl p-5 border border-red-500/50 space-y-4 font-mono">
                       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-2 border-b border-gray-800 pb-3">
                         <div className="space-y-1">
-                          <span className="text-[11px] text-red-400 font-bold uppercase bg-red-500/10 px-2 py-0.5 rounded border border-red-500/30">
-                            ⚡ In-Flight Packet Captured
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[11px] text-red-400 font-bold uppercase bg-red-500/10 px-2 py-0.5 rounded border border-red-500/30">
+                              ⚡ In-Flight Packet Captured
+                            </span>
+                            <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${
+                              isPqc 
+                                ? 'bg-cyan-950/50 text-[#00e5ff] border-cyan-500/50' 
+                                : 'bg-amber-950/50 text-amber-400 border-amber-500/50'
+                            }`}>
+                              {isPqc ? '🛡️ Quantum-Encrypted (ML-KEM + ML-DSA)' : '⚠️ Unencrypted Stream'}
+                            </span>
+                          </div>
                           <div className="text-xs text-gray-300">
                             Sender: <strong className="text-cyan-400">{item.senderIp} (Laptop A)</strong> ➔ Target: <strong className="text-purple-400">{item.intendedTarget || item.targetIp} (Laptop B)</strong>
                           </div>
@@ -820,7 +1002,9 @@ export default function LanSharingDashboard({
                             {pkg.ciphertextHex || 'N/A'}
                           </div>
                           <p className="text-[10px] text-gray-400 mt-1 italic">
-                            🔒 Attacker Note: Eve cannot read plaintext content because ML-KEM-768 lattice encryption cannot be broken.
+                            {isPqc 
+                              ? '🔒 PQC Protected: Eve cannot break ML-KEM-768 lattice ciphertext. Any tampering will trigger [ATTACK FAILED] and be blocked by ML-DSA at Laptop B.'
+                              : '⚠️ Plaintext Vulnerable: Target file is unencrypted; payload bits can be read and tampered.'}
                           </p>
                         </div>
                       </div>
@@ -838,7 +1022,10 @@ export default function LanSharingDashboard({
                           onClick={() => handleAttackerForward(item, true)}
                           className="px-5 py-2.5 bg-red-600 hover:bg-red-500 text-white text-xs font-bold uppercase rounded-lg shadow-lg glow-red transition-all flex items-center gap-2 animate-pulse"
                         >
-                          <AlertTriangle className="w-4 h-4" /> 🚨 Corrupt & Inject Attack to Laptop B
+                          <AlertTriangle className="w-4 h-4" />
+                          {isPqc 
+                            ? '🚨 Attempt Bit-Flip Attack (Will Fail via ML-DSA at Laptop B)' 
+                            : '🚨 Corrupt & Inject Attack to Laptop B'}
                         </button>
                       </div>
                     </div>

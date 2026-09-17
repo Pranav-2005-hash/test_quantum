@@ -11,7 +11,9 @@ const {
     acknowledgePackage, 
     clearInbox,
     registerIdentity,
-    getIdentity
+    getIdentity,
+    getAlerts,
+    getAttackLog
 } = require('./controllers/lanController');
 
 const app = express();
@@ -40,6 +42,10 @@ app.delete('/api/inbox/clear', clearInbox);
 // Node PQC Identity Exchange Routes
 app.post('/api/identity', registerIdentity);
 app.get('/api/identity', getIdentity);
+
+// Intrusion Alerts & Attack Terminal Telemetry
+app.get('/api/alerts', getAlerts);
+app.get('/api/attack-log', getAttackLog);
 
 app.listen(PORT, HOST, () => {
     console.log(`=================================================`);
