@@ -390,17 +390,16 @@ const transmitPackage = async (req, res) => {
             inbox.unshift(entry);
             if (inbox.length > 50) inbox = inbox.slice(0, 50);
 
-            // Active stream detection & intrusion alert logging
-            const displayTarget = entry.intendedTarget || entry.targetIp || 'Local Inbox';
-            attackTerminalLog(`[ATTACK STATUS] Active File Transfer Detected (${entry.senderIp} -> ${displayTarget})`);
-            if (pqcProtected) {
-                attackTerminalLog(`[ATTACK FAILED] Target file is Quantum-Encrypted. Cannot disrupt payload.`);
-                attackTerminalLog(`[ATTACK FAILED] PQC Suite: ${packageData.algorithms || 'ML-KEM + ML-DSA'}`);
-                attackTerminalLog(`[ATTACK FAILED] ML-DSA signature will detect any modification. Forwarding intact.`);
-            } else {
-                attackTerminalLog(`[ATTACK STATUS] Target file is UNENCRYPTED — payload is readable and alterable.`);
+            // If this node is acting as an intermediary sniffer (Laptop C)
+            if (isInterceptedTraffic) {
+                const displayTarget = entry.intendedTarget || entry.targetIp || 'Receiver Node';
+                attackTerminalLog(`[SNIFFER CAPTURED] Active in-flight stream intercepted: ${entry.senderIp} -> ${displayTarget}`);
+                if (pqcProtected) {
+                    attackTerminalLog(`[STREAM INTEL] Suite: ${packageData.algorithms || 'ML-KEM + ML-DSA'} (Protected by Post-Quantum Cryptography)`);
+                } else {
+                    attackTerminalLog(`[STREAM INTEL] Unencrypted standard stream detected (Vulnerable to Tampering)`);
+                }
             }
-            broadcastIntrusionAlert(netInfo.ip, displayTarget, entry.senderIp, entry.id, pqcProtected);
 
             return res.json({
                 success: true,
@@ -565,9 +564,16 @@ const forwardInterceptedPackage = async (req, res) => {
             attackTerminalLog(`[ATTACK STATUS] Passing packet unaltered to Laptop B (${dest}). No attack applied.`);
         }
 
-        // Broadcast intrusion alert to Laptop A & B for unencrypted tampering or sniff pass-through
-        if (!tamper || !pqcProtected) {
-            broadcastIntrusionAlert(attackerIp, dest, entry.senderIp, entry.id, pqcProtected);
+        // Broadcast intrusion alert to Laptop A & B ONLY if an attack was actually performed
+        if (tamper && !pqcProtected) {
+            broadcastIntrusionAlert(
+                attackerIp, 
+                dest, 
+                entry.senderIp, 
+                entry.id, 
+                false,
+                `[SECURITY ALERT] Laptop C intercepted and corrupted unencrypted transmission stream (Sender: ${entry.senderIp} -> Target: ${dest})!`
+            );
         }
 
         const portToUse = destinationPort || process.env.PORT || 5000;
@@ -637,6 +643,12 @@ const getAlerts = (req, res) => {
     });
 };
 
+// DELETE /api/alerts/clear — Clear pending alerts
+const clearAlerts = (req, res) => {
+    pendingAlerts = [];
+    return res.json({ success: true, message: "All intrusion alerts cleared." });
+};
+
 // GET /api/attack-log — Returns Laptop C's attacker terminal log
 const getAttackLog = (req, res) => {
     return res.json({
@@ -700,6 +712,7 @@ module.exports = {
     registerIdentity,
     getIdentity,
     getAlerts,
+    clearAlerts,
     receiveAlert,
     getAttackLog
 };

@@ -13,6 +13,7 @@ const {
     registerIdentity,
     getIdentity,
     getAlerts,
+    clearAlerts,
     receiveAlert,
     getAttackLog
 } = require('./controllers/lanController');
@@ -46,6 +47,7 @@ app.get('/api/identity', getIdentity);
 
 // Intrusion Alerts & Attack Terminal Telemetry
 app.get('/api/alerts', getAlerts);
+app.delete('/api/alerts/clear', clearAlerts);
 app.post('/api/alerts/notify', receiveAlert);
 app.get('/api/attack-log', getAttackLog);
 

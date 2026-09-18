@@ -606,7 +606,10 @@ export default function LanSharingDashboard({
             </div>
             <div className="flex items-center gap-2 self-end md:self-auto flex-shrink-0">
               <button
-                onClick={() => setActiveIntrusionAlert(null)}
+                onClick={() => {
+                  setActiveIntrusionAlert(null);
+                  fetch('/api/alerts/clear', { method: 'DELETE' }).catch(() => {});
+                }}
                 className="px-4 py-2 bg-red-900/60 hover:bg-red-800 text-red-100 text-xs font-bold uppercase rounded-lg border border-red-500 transition-all shadow"
               >
                 Acknowledge Alert
