@@ -35,8 +35,37 @@ const attackTerminalLog = (line) => {
     console.log(entry);
 };
 
+// ── OUT-OF-BAND ALERT DISPATCHER ─────────────────────────────────────────────
+const sendAlertToHost = async (host, alertObj) => {
+    if (!host) return;
+    try {
+        let cleanHost = host.trim();
+        if (cleanHost === '127.0.0.1' || cleanHost === 'localhost' || cleanHost === '::1' || cleanHost === 'Unknown IP' || cleanHost === '') return;
+        let alertUrl;
+        if (cleanHost.startsWith('http://') || cleanHost.startsWith('https://')) {
+            alertUrl = `${cleanHost.replace(/\/+$/, '')}/api/alerts/notify`;
+        } else if (cleanHost.includes(':')) {
+            alertUrl = `http://${cleanHost}/api/alerts/notify`;
+        } else {
+            alertUrl = `http://${cleanHost}:5000/api/alerts/notify`;
+        }
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2500);
+        await fetch(alertUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(alertObj),
+            signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+    } catch (e) {
+        // Non-blocking out-of-band notification attempt
+    }
+};
+
 // ── INTRUSION ALERT BROADCAST ────────────────────────────────────────────────
-const broadcastIntrusionAlert = (attackerIp, targetIp, senderIp, packageId, pqcProtected) => {
+const broadcastIntrusionAlert = (attackerIp, targetIp, senderIp, packageId, pqcProtected, customMessage) => {
     const alert = {
         id: `alert_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
         timestamp: new Date().toISOString(),
@@ -45,13 +74,31 @@ const broadcastIntrusionAlert = (attackerIp, targetIp, senderIp, packageId, pqcP
         targetIp,
         packageId,
         pqcProtected,
-        message: `[SECURITY ALERT] Unauthorized Intrusion / Interception Attempt Detected from Laptop C (IP: ${attackerIp})!`,
+        message: customMessage || `[SECURITY ALERT] Unauthorized Intrusion / Interception Attempt Detected from Laptop C (IP: ${attackerIp})!`,
         read: false
     };
     pendingAlerts.unshift(alert);
     if (pendingAlerts.length > 50) pendingAlerts = pendingAlerts.slice(0, 50);
     attackTerminalLog(`[INTRUSION BROADCAST] Alert dispatched — Sender:${senderIp}, Target:${targetIp}`);
+
+    // Out-of-band dispatch to both Sender (Laptop A) and Receiver (Laptop B)
+    sendAlertToHost(senderIp, alert);
+    sendAlertToHost(targetIp, alert);
+
     return alert;
+};
+
+// POST /api/alerts/notify — Out-of-band alert receiver for Laptop A & Laptop B
+const receiveAlert = (req, res) => {
+    const alert = req.body;
+    if (alert && alert.id) {
+        if (!pendingAlerts.some(a => a.id === alert.id)) {
+            pendingAlerts.unshift(alert);
+            if (pendingAlerts.length > 50) pendingAlerts = pendingAlerts.slice(0, 50);
+        }
+        return res.json({ success: true, message: "Intrusion alert received and queued." });
+    }
+    return res.status(400).json({ success: false, message: "Invalid alert data." });
 };
 
 // Helper to get all active non-internal IPv4 network interfaces
@@ -195,10 +242,34 @@ const transmitPackage = async (req, res) => {
         // ── MITM TAMPER — respects PQC protection state ──────────────────────────
         if (mitmTamperEnabled) {
             if (pqcProtected) {
-                attackTerminalLog(`[ATTACK STATUS] Active File Transfer Detected (${realSenderIp} -> ${targetIp || 'local'})`);
-                attackTerminalLog(`[ATTACK FAILED] Target file is Quantum-Encrypted. Cannot disrupt payload.`);
-                attackTerminalLog(`[ATTACK FAILED] ML-KEM-768 lattice ciphertext is computationally infeasible to break.`);
-                attackTerminalLog(`[ATTACK FAILED] ML-DSA signature will detect any byte modification at receiver.`);
+                attackTerminalLog(`[ATTACK STATUS] Target Stream Detected (Quantum-Encrypted)`);
+                attackTerminalLog(`[ATTACK FAILED] Cannot disrupt payload! Quantum integrity tag prevents tampering.`);
+
+                broadcastIntrusionAlert(
+                    netInfo.ip || 'Laptop C',
+                    targetIp || 'local',
+                    realSenderIp,
+                    null,
+                    true,
+                    `[SECURITY ALERT] Laptop C attempted to tamper with Quantum-Encrypted stream (Sender: ${realSenderIp} -> Target: ${targetIp || 'local'}), but attack was BLOCKED by Quantum Integrity Tags!`
+                );
+
+                // Preserve original clean package!
+                finalPackage = {
+                    ...packageData,
+                    attackAttempted: true,
+                    attackBlocked: true,
+                    attackerIp: netInfo.ip || 'Laptop C',
+                    tamperedByMitm: false,
+                    attackStatus: 'BLOCKED_BY_QUANTUM_INTEGRITY'
+                };
+
+                tamperDetails = {
+                    mitmAction: "Attack Attempted on Quantum-Encrypted Stream — BLOCKED by Quantum Integrity Tag",
+                    pqcBlocked: true,
+                    attackFailed: true,
+                    timestamp: new Date().toISOString()
+                };
             } else {
                 attackTerminalLog(`[ATTACK STATUS] Active File Transfer Detected (${realSenderIp} -> ${targetIp || 'local'})`);
                 attackTerminalLog(`[ATTACK STATUS] Target file is UNENCRYPTED. Proceeding with payload corruption...`);
@@ -419,25 +490,38 @@ const forwardInterceptedPackage = async (req, res) => {
 
         attackTerminalLog(`[ATTACK STATUS] Active File Transfer Detected (${entry.senderIp} -> ${dest})`);
 
+        const attackerIp = getLocalIp().ip;
+
         if (tamper) {
             if (pqcProtected) {
-                // PQC mode: attack is attempted but will be rejected by ML-DSA at Laptop B
-                attackTerminalLog(`[ATTACK FAILED] Target file is Quantum-Encrypted. Cannot disrupt payload.`);
-                attackTerminalLog(`[ATTACK FAILED] PQC Suite: ${entry.package.algorithms || 'ML-KEM + ML-DSA'}`);
-                attackTerminalLog(`[ATTACK FAILED] Any ciphertext modification will trigger ML-DSA signature mismatch at Laptop B.`);
+                // Quantum Mode (Option 2):
+                // Laptop C attempts to manipulate payload, but attack fails!
+                attackTerminalLog(`[ATTACK STATUS] Target Stream Detected (Quantum-Encrypted)`);
+                attackTerminalLog(`[ATTACK FAILED] Cannot disrupt payload! Quantum integrity tag prevents tampering.`);
 
-                const originalCiphertext = pkgToSend.ciphertextHex || '';
-                const originalFingerprint = pkgToSend.fingerprint || '';
+                // Trigger out-of-band security alert to notify Laptop A and Laptop B
+                broadcastIntrusionAlert(
+                    attackerIp,
+                    dest,
+                    entry.senderIp,
+                    entry.id,
+                    true,
+                    `[SECURITY ALERT] Laptop C attempted to tamper with Quantum-Encrypted stream (Sender: ${entry.senderIp} -> Target: ${dest}), but attack was BLOCKED by Quantum Integrity Tags!`
+                );
+
+                // FORWARD THE ORIGINAL CLEAN PACKET (do NOT alter ciphertext or fingerprint)
                 pkgToSend = {
-                    ...pkgToSend,
-                    ciphertextHex: originalCiphertext.substring(0, 10) + 'BAD9999' + originalCiphertext.substring(17),
-                    fingerprint: 'ff9999deadbeef' + originalFingerprint.substring(14),
-                    tamperedByMitm: true
+                    ...entry.package,
+                    attackAttempted: true,
+                    attackBlocked: true,
+                    attackerIp,
+                    tamperedByMitm: false,
+                    attackStatus: 'BLOCKED_BY_QUANTUM_INTEGRITY'
                 };
                 tamperDetails = {
-                    mitmAction: "Adversary Node C ATTEMPTED corruption on PQC-Protected file — BLOCKED by ML-DSA",
+                    mitmAction: "Adversary Node C ATTEMPTED corruption on PQC-Protected file — BLOCKED by Quantum Integrity Tag",
                     pqcBlocked: true,
-                    corruptedBytesCount: 8,
+                    attackFailed: true,
                     timestamp: new Date().toISOString()
                 };
             } else {
@@ -481,9 +565,10 @@ const forwardInterceptedPackage = async (req, res) => {
             attackTerminalLog(`[ATTACK STATUS] Passing packet unaltered to Laptop B (${dest}). No attack applied.`);
         }
 
-        // Broadcast intrusion alert to Laptop A & B
-        const attackerIp = getLocalIp().ip;
-        broadcastIntrusionAlert(attackerIp, dest, entry.senderIp, entry.id, pqcProtected);
+        // Broadcast intrusion alert to Laptop A & B for unencrypted tampering or sniff pass-through
+        if (!tamper || !pqcProtected) {
+            broadcastIntrusionAlert(attackerIp, dest, entry.senderIp, entry.id, pqcProtected);
+        }
 
         const portToUse = destinationPort || process.env.PORT || 5000;
         const targetUrl = resolveTargetUrl(dest, portToUse);
@@ -515,9 +600,10 @@ const forwardInterceptedPackage = async (req, res) => {
                 success: true,
                 pqcProtected,
                 attackBlocked: tamper && pqcProtected,
+                attackFailed: tamper && pqcProtected,
                 message: tamper
                     ? pqcProtected
-                        ? `🔒 ATTACK ATTEMPTED on PQC file — ML-DSA will REJECT at Laptop B!`
+                        ? `[ATTACK FAILED] Cannot disrupt payload! Quantum integrity tag prevents tampering. Original clean packet forwarded to Laptop B.`
                         : `🚨 Tampered payload injected and delivered to Laptop B (${dest})!`
                     : `✅ Clean payload forwarded to Laptop B (${dest}).`,
                 targetUrl
@@ -614,5 +700,6 @@ module.exports = {
     registerIdentity,
     getIdentity,
     getAlerts,
+    receiveAlert,
     getAttackLog
 };

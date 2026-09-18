@@ -599,7 +599,7 @@ export default function LanSharingDashboard({
                 {activeIntrusionAlert.pqcProtected && (
                   <p className="text-xs text-green-300 font-mono font-bold flex items-center gap-1.5 pt-0.5">
                     <ShieldCheck className="w-4 h-4 text-green-400 flex-shrink-0" />
-                    Quantum Shield Active: ML-KEM lattice ciphertext remains uncrackable. ML-DSA signature will reject any altered payload at Laptop B.
+                    Quantum Shield Active: Attack attempt BLOCKED! Quantum integrity tags prevented tampering and preserved authentic document intact.
                   </p>
                 )}
               </div>
@@ -1170,7 +1170,7 @@ export default function LanSharingDashboard({
                           </div>
                           <p className="text-[10px] text-gray-400 mt-1 italic">
                             {isPqc 
-                              ? '🔒 PQC Protected: Eve cannot break ML-KEM-768 lattice ciphertext. Any tampering will trigger [ATTACK FAILED] and be blocked by ML-DSA at Laptop B.'
+                              ? '🔒 PQC Protected: Eve cannot break ML-KEM-768 lattice ciphertext. Any tampering will trigger [ATTACK FAILED] and forward clean packet intact to Laptop B.'
                               : '⚠️ Plaintext Vulnerable: Target file is unencrypted; payload bits can be read and tampered.'}
                           </p>
                         </div>
@@ -1191,7 +1191,7 @@ export default function LanSharingDashboard({
                         >
                           <AlertTriangle className="w-4 h-4" />
                           {isPqc 
-                            ? '🚨 Attempt Bit-Flip Attack (Will Fail via ML-DSA at Laptop B)' 
+                            ? '🚨 Attempt Bit-Flip Attack (Will Fail — Quantum Integrity Tags)' 
                             : '🚨 Corrupt & Inject Attack to Laptop B'}
                         </button>
                       </div>
@@ -1300,6 +1300,12 @@ export default function LanSharingDashboard({
                           }`}>
                             {(pkg.kemCiphertextHex && pkg.signature) ? '🔒 Quantum-Encrypted' : '⚠️ Unencrypted'}
                           </span>
+                          {/* Attack Blocked Badge */}
+                          {(pkg.attackBlocked || item.tamperDetails?.pqcBlocked || pkg.attackStatus === 'BLOCKED_BY_QUANTUM_INTEGRITY') && (
+                            <span className="px-2.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase border bg-green-500/20 border-green-500 text-green-300 flex items-center gap-1">
+                              <ShieldCheck className="w-3.5 h-3.5 text-green-400" /> Attack Blocked — Intact
+                            </span>
+                          )}
                         </h4>
                       </div>
 
@@ -1361,8 +1367,18 @@ export default function LanSharingDashboard({
                           <div className="text-gray-500 italic text-center py-4">Click "Decrypt & Open Document" to run SHA-256 integrity check and view full file.</div>
                         ) : decState.verified ? (
                           <div className="space-y-2 text-green-400">
-                            <p className="text-[11px] font-bold">✅ Hash Match Confirmed</p>
-                            <p className="text-[10px] text-gray-300 leading-tight">Document payload authenticated. No MITM tampering detected.</p>
+                            <p className="text-[11px] font-bold flex items-center gap-1.5">
+                              {(pkg.attackBlocked || item.tamperDetails?.pqcBlocked || pkg.attackStatus === 'BLOCKED_BY_QUANTUM_INTEGRITY') ? (
+                                <><ShieldCheck className="w-4 h-4 text-green-400 flex-shrink-0" /> 🛡️ Attack Attempt Blocked — Intact</>
+                              ) : (
+                                <>✅ Hash Match Confirmed</>
+                              )}
+                            </p>
+                            <p className="text-[10px] text-gray-300 leading-tight">
+                              {(pkg.attackBlocked || item.tamperDetails?.pqcBlocked || pkg.attackStatus === 'BLOCKED_BY_QUANTUM_INTEGRITY')
+                                ? 'Adversary Laptop C attempted tampering in-transit, but Quantum Integrity Tags prevented payload modification. Authentic document delivered uncorrupted.'
+                                : 'Document payload authenticated. No MITM tampering detected.'}
+                            </p>
                           </div>
                         ) : (
                           <div className="space-y-2 text-red-400">
@@ -1466,7 +1482,12 @@ export default function LanSharingDashboard({
                   {selectedDocModal.resultState?.verified ? (
                     <>
                       <CheckCircle2 className="w-4 h-4 text-green-400" />
-                      <span>DECRYPTED & AUTHENTICATED — SHA-256 DOCUMENT HASH MATCHED PERFECTLY</span>
+                      <span>
+                        {(selectedDocModal.package.attackBlocked || selectedDocModal.tamperDetails?.pqcBlocked || selectedDocModal.package.attackStatus === 'BLOCKED_BY_QUANTUM_INTEGRITY')
+                          ? '🛡️ ATTACK ATTEMPT BLOCKED BY QUANTUM INTEGRITY TAGS — AUTHENTIC DOCUMENT DELIVERED UNCORRUPTED'
+                          : 'DECRYPTED & AUTHENTICATED — SHA-256 DOCUMENT HASH MATCHED PERFECTLY'
+                        }
+                      </span>
                     </>
                   ) : (
                     <>
