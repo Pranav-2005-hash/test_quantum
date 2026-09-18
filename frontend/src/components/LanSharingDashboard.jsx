@@ -235,7 +235,7 @@ export default function LanSharingDashboard({
       await new Promise(r => setTimeout(r, 150));
 
       log(`Document sensitivity: ${classification?.label || 'PUBLIC'}`);
-      log(`Transmission Mode: ${encryptionMode === 'quantum' ? '🔒 QUANTUM-ENCRYPTED (ML-KEM + ML-DSA)' : '⚠️ STANDARD / UNENCRYPTED'}`);
+      log(`Transmission Mode: ${encryptionMode === 'quantum' ? '🔒 QUANTUM-ENCRYPTED (HQC + SLH-DSA)' : '⚠️ STANDARD / UNENCRYPTED'}`);
       await new Promise(r => setTimeout(r, 150));
 
       const isQuantumMode = encryptionMode === 'quantum';
@@ -313,7 +313,7 @@ export default function LanSharingDashboard({
         }
         const kemCiphertextHex = bytesToHex(encResult.ciphertext);
 
-        log(`Encrypting payload using AES-256-GCM (ML-KEM Shared Secret)...`);
+        log(`Encrypting payload using AES-256-GCM (HQC Shared Secret)...`);
         const rawPayloadBytes = new TextEncoder().encode(fileBase64 || documentText);
         const aesResult = await aesGcmEncrypt(rawPayloadBytes, encResult.sharedSecret);
         const ciphertextHex = bytesToHex(aesResult.ciphertext);
@@ -779,7 +779,7 @@ export default function LanSharingDashboard({
                   </span>
                 </div>
                 <p className="text-[11px] text-gray-400 leading-relaxed">
-                  Full <strong className="text-white">ML-KEM-768 + ML-DSA-65</strong> protection. Lattice-based key encapsulation, AES-256-GCM encryption, and post-quantum digital signatures.
+                  Full <strong className="text-white">HQC-256 + SLH-DSA-128s</strong> protection. Code-based Hamming Quasi-Cyclic key encapsulation, AES-256-GCM encryption, and stateless hash-based digital signatures.
                   Laptop C <span className="text-green-400 font-bold">CANNOT tamper</span> with this stream.
                 </p>
               </button>
@@ -811,7 +811,7 @@ export default function LanSharingDashboard({
                   </span>
                 </div>
                 <p className="text-[11px] text-gray-400 leading-relaxed">
-                  Raw file bytes transmitted <strong className="text-white">without any cryptographic protection</strong>. No ML-KEM, no ML-DSA, no AES-GCM.
+                  Raw file bytes transmitted <strong className="text-white">without any cryptographic protection</strong>. No HQC, no SLH-DSA, no AES-GCM.
                   Laptop C <span className="text-red-400 font-bold">CAN read, tamper, and corrupt</span> this stream.
                 </p>
               </button>
@@ -1146,7 +1146,7 @@ export default function LanSharingDashboard({
                                 ? 'bg-cyan-950/50 text-[#00e5ff] border-cyan-500/50' 
                                 : 'bg-amber-950/50 text-amber-400 border-amber-500/50'
                             }`}>
-                              {isPqc ? '🛡️ Quantum-Encrypted (ML-KEM + ML-DSA)' : '⚠️ Unencrypted Stream'}
+                              {isPqc ? '🛡️ Quantum-Encrypted (HQC + SLH-DSA)' : '⚠️ Unencrypted Stream'}
                             </span>
                           </div>
                           <div className="text-xs text-gray-300">
@@ -1167,13 +1167,13 @@ export default function LanSharingDashboard({
                           <span className="text-orange-400 font-bold">{pkg.classification?.label || 'CONFIDENTIAL'}</span>
                         </div>
                         <div className="md:col-span-2">
-                          <span className="text-gray-500 block">Ciphertext Bitstream (Encrypted by ML-KEM):</span>
+                          <span className="text-gray-500 block">Ciphertext Bitstream (Encrypted by HQC):</span>
                           <div className="text-[10px] text-green-400/80 truncate font-mono bg-black/60 p-2 rounded mt-1 border border-gray-900">
                             {pkg.ciphertextHex || 'N/A'}
                           </div>
                           <p className="text-[10px] text-gray-400 mt-1 italic">
                             {isPqc 
-                              ? '🔒 PQC Protected: Eve cannot break ML-KEM-768 lattice ciphertext. Any tampering will trigger [ATTACK FAILED] and forward clean packet intact to Laptop B.'
+                              ? '🔒 PQC Protected: Eve cannot break HQC-256 code-based ciphertext. Any tampering will trigger [ATTACK FAILED] and forward clean packet intact to Laptop B.'
                               : '⚠️ Plaintext Vulnerable: Target file is unencrypted; payload bits can be read and tampered.'}
                           </p>
                         </div>
@@ -1385,7 +1385,7 @@ export default function LanSharingDashboard({
                           </div>
                         ) : (
                           <div className="space-y-2 text-red-400">
-                            <p className="text-[11px] font-bold">❌ {(pkg.kemCiphertextHex && pkg.signature) ? 'SHA-256 Hash Mismatch — Attack BLOCKED by ML-DSA' : 'File Stream Corrupted! Tampering Detected in Unencrypted Transfer'}</p>
+                            <p className="text-[11px] font-bold">❌ {(pkg.kemCiphertextHex && pkg.signature) ? 'SHA-256 Hash Mismatch — Attack BLOCKED by SLH-DSA' : 'File Stream Corrupted! Tampering Detected in Unencrypted Transfer'}</p>
                             <p className="text-[10px] text-red-300 leading-tight">{(pkg.kemCiphertextHex && pkg.signature) ? 'PQC signature verification rejected the tampered payload. Quantum Shield protection was active.' : '[WARNING] File was sent WITHOUT quantum encryption. Laptop C successfully intercepted and corrupted the payload in transit.'}</p>
                           </div>
                         )}
@@ -1496,7 +1496,7 @@ export default function LanSharingDashboard({
                     <>
                       <AlertCircle className="w-4 h-4 text-red-400" />
                       <span>{(selectedDocModal.package.kemCiphertextHex && selectedDocModal.package.signature)
-                        ? 'TAMPERED PAYLOAD DETECTED — ATTACK BLOCKED BY ML-DSA SIGNATURE VERIFICATION'
+                        ? 'TAMPERED PAYLOAD DETECTED — ATTACK BLOCKED BY SLH-DSA SIGNATURE VERIFICATION'
                         : '[WARNING] FILE STREAM CORRUPTED — TAMPERING DETECTED IN UNENCRYPTED TRANSFER'
                       }</span>
                     </>
