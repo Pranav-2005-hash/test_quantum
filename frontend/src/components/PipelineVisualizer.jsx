@@ -9,7 +9,7 @@ const NODES = [
   { id: 'nlp', label: 'NLP Classifier', icon: Search, color: 'text-[#00e5ff]', border: 'border-[#00e5ff] glow-cyan' },
   { id: 'ai', label: 'AI Selector', icon: BrainCircuit, color: 'text-[#7c3aed]', border: 'border-[#7c3aed] glow-purple' },
   { id: 'sign', label: 'SLH-DSA Sign', icon: CheckCircle2, color: 'text-[#39ff14]', border: 'border-[#39ff14] glow-green' },
-  { id: 'enc', label: 'HQC Encrypt', icon: Key, color: 'text-[#f97316]', border: 'border-[#f97316] glow-orange' },
+  { id: 'enc', label: 'ML-KEM Encrypt', icon: Key, color: 'text-[#f97316]', border: 'border-[#f97316] glow-orange' },
   { id: 'out', label: 'Secure Output', icon: Lock, color: 'text-white', border: 'border-white' }
 ];
 

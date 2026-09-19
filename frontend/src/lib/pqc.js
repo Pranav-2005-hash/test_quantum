@@ -1,7 +1,5 @@
-// NOTE: HQC and Classic McEliece have no mature audited JS implementation.
-// We use ML-KEM (FIPS 203) as the real KEM underneath these UI labels, sized
-// to match the intended NIST security category. This is documented here so
-// the mismatch between displayed label and actual primitive is never hidden.
+// NIST FIPS 203 ML-KEM (Module-Lattice-Based Key-Encapsulation Mechanism)
+// and NIST FIPS 205 SLH-DSA (Stateless Hash-Based Digital Signatures)
 
 import { ml_kem512, ml_kem768, ml_kem1024 } from '@noble/post-quantum/ml-kem.js';
 import {
@@ -13,10 +11,13 @@ import { gcm } from '@noble/ciphers/aes.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 
 const KEM_MAP = {
-  'HQC-128': ml_kem512,   // Category 1 (128-bit)
-  'HQC-192': ml_kem768,   // Category 3 (192-bit)
-  'HQC-256': ml_kem1024,  // Category 5 (256-bit)
-  'Classic McEliece': ml_kem1024, // Category 5 (McEliece is always paired with HQC-256 in this app)
+  'ML-KEM-512': ml_kem512,   // Category 1 (128-bit)
+  'ML-KEM-768': ml_kem768,   // Category 3 (192-bit)
+  'ML-KEM-1024': ml_kem1024, // Category 5 (256-bit)
+  'HQC-128': ml_kem512,      // Backward compatibility alias
+  'HQC-192': ml_kem768,
+  'HQC-256': ml_kem1024,
+  'Classic McEliece': ml_kem1024,
 };
 
 const SIG_MAP = {
@@ -28,6 +29,9 @@ const SIG_MAP = {
 
 // NIST Security Bits category metadata for explainable brute-force infeasibility calculations
 export const NIST_SECURITY_BITS = {
+  'ML-KEM-512': 128,
+  'ML-KEM-768': 192,
+  'ML-KEM-1024': 256,
   'HQC-128': 128,
   'HQC-192': 192,
   'HQC-256': 256,
@@ -39,21 +43,21 @@ export const NIST_SECURITY_BITS = {
 
 // NIST ML-KEM Category mappings by key / ciphertext length
 export const KEM_BY_PK_LENGTH = {
-  800: { algo: ml_kem512, label: 'HQC-128 (ML-KEM-512)', cipherLen: 768 },
-  1184: { algo: ml_kem768, label: 'HQC-192 (ML-KEM-768)', cipherLen: 1088 },
-  1568: { algo: ml_kem1024, label: 'HQC-256 (ML-KEM-1024)', cipherLen: 1568 }
+  800: { algo: ml_kem512, label: 'ML-KEM-512', cipherLen: 768 },
+  1184: { algo: ml_kem768, label: 'ML-KEM-768', cipherLen: 1088 },
+  1568: { algo: ml_kem1024, label: 'ML-KEM-1024', cipherLen: 1568 }
 };
 
 export const KEM_BY_CT_LENGTH = {
-  768: { algo: ml_kem512, label: 'HQC-128 (ML-KEM-512)', skLen: 1632 },
-  1088: { algo: ml_kem768, label: 'HQC-192 (ML-KEM-768)', skLen: 2400 },
-  1568: { algo: ml_kem1024, label: 'HQC-256 (ML-KEM-1024)', skLen: 3168 }
+  768: { algo: ml_kem512, label: 'ML-KEM-512', skLen: 1632 },
+  1088: { algo: ml_kem768, label: 'ML-KEM-768', skLen: 2400 },
+  1568: { algo: ml_kem1024, label: 'ML-KEM-1024', skLen: 3168 }
 };
 
 export function parseAlgorithmString(algorithms) {
-  const str = algorithms || 'HQC-256 + SLH-DSA-128s';
+  const str = algorithms || 'ML-KEM-1024 + SLH-DSA-128s';
   const parts = str.split(' + ').map(s => s.trim());
-  const kemLabel = parts[0] || 'HQC-256';
+  const kemLabel = parts[0] || 'ML-KEM-1024';
   const sigLabel = parts[1] || 'SLH-DSA-128s';
 
   const kemAlgo = KEM_MAP[kemLabel] || ml_kem1024;
@@ -69,7 +73,7 @@ export function generateIdentity(algorithms) {
   const sigKeys = sigAlgo.keygen();
 
   // Generate multi-tier keys across all NIST categories so this node can
-  // seamlessly receive envelopes encrypted under HQC-128, HQC-192, or HQC-256
+  // seamlessly receive envelopes encrypted under ML-KEM-512, ML-KEM-768, or ML-KEM-1024
   const k512 = ml_kem512.keygen();
   const k768 = ml_kem768.keygen();
   const k1024 = ml_kem1024.keygen();
@@ -82,6 +86,9 @@ export function generateIdentity(algorithms) {
     kemLabel,
     sigLabel,
     multiKeys: {
+      'ML-KEM-512': { pk: k512.publicKey, sk: k512.secretKey, algo: ml_kem512, len: 800 },
+      'ML-KEM-768': { pk: k768.publicKey, sk: k768.secretKey, algo: ml_kem768, len: 1184 },
+      'ML-KEM-1024': { pk: k1024.publicKey, sk: k1024.secretKey, algo: ml_kem1024, len: 1568 },
       'HQC-128': { pk: k512.publicKey, sk: k512.secretKey, algo: ml_kem512, len: 800 },
       'HQC-192': { pk: k768.publicKey, sk: k768.secretKey, algo: ml_kem768, len: 1184 },
       'HQC-256': { pk: k1024.publicKey, sk: k1024.secretKey, algo: ml_kem1024, len: 1568 },

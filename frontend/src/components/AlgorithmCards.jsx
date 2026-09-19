@@ -3,15 +3,15 @@ import { Key, ShieldCheck, Zap, Hash } from 'lucide-react';
 
 const ALGORITHMS = [
   {
-    id: 'hqc',
-    name: 'HQC (Hamming Quasi-Cyclic)',
+    id: 'mlkem',
+    name: 'ML-KEM (Module-Lattice KEM)',
     subtitle: 'The Quantum-Safe Lock',
-    description: 'A code-based Key Encapsulation Mechanism (KEM) providing post-quantum secure key exchange. Uses structured error-correcting codes to hide the shared secret.',
+    description: 'NIST FIPS 203 Module-Lattice-Based Key Encapsulation Mechanism providing post-quantum secure key exchange based on the hardness of Module-LWE.',
     icon: Key,
     color: 'text-[#f97316]',
     border: 'border-[#f97316]',
     bg: 'bg-[#f97316]/10',
-    tags: ['Code-Based', 'NIST Round 4', 'KEM']
+    tags: ['Lattice-Based', 'FIPS 203', 'KEM']
   },
   {
     id: 'slhdsa',

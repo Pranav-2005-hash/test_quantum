@@ -65,10 +65,9 @@ export default function LanSharingDashboard({
             kemLabel: id.kemLabel,
             sigLabel: id.sigLabel,
             keysBySuite: {
-              'HQC-128': bytesToHex(id.multiKeys?.['HQC-128']?.pk),
-              'HQC-192': bytesToHex(id.multiKeys?.['HQC-192']?.pk),
-              'HQC-256': bytesToHex(id.multiKeys?.['HQC-256']?.pk),
-              'Classic McEliece': bytesToHex(id.multiKeys?.['Classic McEliece']?.pk)
+              'ML-KEM-512': bytesToHex(id.multiKeys?.['ML-KEM-512']?.pk || id.multiKeys?.['HQC-128']?.pk),
+              'ML-KEM-768': bytesToHex(id.multiKeys?.['ML-KEM-768']?.pk || id.multiKeys?.['HQC-192']?.pk),
+              'ML-KEM-1024': bytesToHex(id.multiKeys?.['ML-KEM-1024']?.pk || id.multiKeys?.['HQC-256']?.pk),
             }
           })
         }).catch(err => console.log("Identity register notice:", err.message));
@@ -235,7 +234,7 @@ export default function LanSharingDashboard({
       await new Promise(r => setTimeout(r, 150));
 
       log(`Document sensitivity: ${classification?.label || 'PUBLIC'}`);
-      log(`Transmission Mode: ${encryptionMode === 'quantum' ? '🔒 QUANTUM-ENCRYPTED (HQC + SLH-DSA)' : '⚠️ STANDARD / UNENCRYPTED'}`);
+      log(`Transmission Mode: ${encryptionMode === 'quantum' ? '🔒 QUANTUM-ENCRYPTED (ML-KEM + SLH-DSA)' : '⚠️ STANDARD / UNENCRYPTED'}`);
       await new Promise(r => setTimeout(r, 150));
 
       const isQuantumMode = encryptionMode === 'quantum';
@@ -313,7 +312,7 @@ export default function LanSharingDashboard({
         }
         const kemCiphertextHex = bytesToHex(encResult.ciphertext);
 
-        log(`Encrypting payload using AES-256-GCM (HQC Shared Secret)...`);
+        log(`Encrypting payload using AES-256-GCM (ML-KEM Shared Secret)...`);
         const rawPayloadBytes = new TextEncoder().encode(fileBase64 || documentText);
         const aesResult = await aesGcmEncrypt(rawPayloadBytes, encResult.sharedSecret);
         const ciphertextHex = bytesToHex(aesResult.ciphertext);
@@ -779,7 +778,7 @@ export default function LanSharingDashboard({
                   </span>
                 </div>
                 <p className="text-[11px] text-gray-400 leading-relaxed">
-                  Full <strong className="text-white">HQC-256 + SLH-DSA-128s</strong> protection. Code-based Hamming Quasi-Cyclic key encapsulation, AES-256-GCM encryption, and stateless hash-based digital signatures.
+                  Full <strong className="text-white">ML-KEM-1024 + SLH-DSA-128s</strong> protection. Module-lattice-based key encapsulation, AES-256-GCM encryption, and stateless hash-based digital signatures.
                   Laptop C <span className="text-green-400 font-bold">CANNOT tamper</span> with this stream.
                 </p>
               </button>
@@ -811,7 +810,7 @@ export default function LanSharingDashboard({
                   </span>
                 </div>
                 <p className="text-[11px] text-gray-400 leading-relaxed">
-                  Raw file bytes transmitted <strong className="text-white">without any cryptographic protection</strong>. No HQC, no SLH-DSA, no AES-GCM.
+                  Raw file bytes transmitted <strong className="text-white">without any cryptographic protection</strong>. No ML-KEM, no SLH-DSA, no AES-GCM.
                   Laptop C <span className="text-red-400 font-bold">CAN read, tamper, and corrupt</span> this stream.
                 </p>
               </button>
@@ -1146,7 +1145,7 @@ export default function LanSharingDashboard({
                                 ? 'bg-cyan-950/50 text-[#00e5ff] border-cyan-500/50' 
                                 : 'bg-amber-950/50 text-amber-400 border-amber-500/50'
                             }`}>
-                              {isPqc ? '🛡️ Quantum-Encrypted (HQC + SLH-DSA)' : '⚠️ Unencrypted Stream'}
+                              {isPqc ? '🛡️ Quantum-Encrypted (ML-KEM + SLH-DSA)' : '⚠️ Unencrypted Stream'}
                             </span>
                           </div>
                           <div className="text-xs text-gray-300">
@@ -1167,13 +1166,13 @@ export default function LanSharingDashboard({
                           <span className="text-orange-400 font-bold">{pkg.classification?.label || 'CONFIDENTIAL'}</span>
                         </div>
                         <div className="md:col-span-2">
-                          <span className="text-gray-500 block">Ciphertext Bitstream (Encrypted by HQC):</span>
+                          <span className="text-gray-500 block">Ciphertext Bitstream (Encrypted by ML-KEM):</span>
                           <div className="text-[10px] text-green-400/80 truncate font-mono bg-black/60 p-2 rounded mt-1 border border-gray-900">
                             {pkg.ciphertextHex || 'N/A'}
                           </div>
                           <p className="text-[10px] text-gray-400 mt-1 italic">
                             {isPqc 
-                              ? '🔒 PQC Protected: Eve cannot break HQC-256 code-based ciphertext. Any tampering will trigger [ATTACK FAILED] and forward clean packet intact to Laptop B.'
+                              ? '🔒 PQC Protected: Eve cannot break ML-KEM-1024 module-lattice ciphertext. Any tampering will trigger [ATTACK FAILED] and forward clean packet intact to Laptop B.'
                               : '⚠️ Plaintext Vulnerable: Target file is unencrypted; payload bits can be read and tampered.'}
                           </p>
                         </div>

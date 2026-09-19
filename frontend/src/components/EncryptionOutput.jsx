@@ -119,7 +119,7 @@ export default function EncryptionOutput({ originalText, encryptedPackage }) {
           </div>
 
           <div className="flex-1 flex flex-col gap-2">
-            <div className="text-xs uppercase tracking-widest text-[#f97316] font-bold ml-1">Encrypted Blob (HQC-256)</div>
+            <div className="text-xs uppercase tracking-widest text-[#f97316] font-bold ml-1">Encrypted Blob (ML-KEM-1024)</div>
             <div className={`flex-1 p-4 rounded-xl bg-black/80 border overflow-y-auto custom-scrollbar break-all font-mono text-xs ${isDecrypted ? 'border-gray-800 text-gray-600' : 'border-[#f97316]/50 text-[#f97316] glow-orange'}`}>
               <AnimatePresence mode="popLayout">
                 {!isDecrypted ? (

@@ -19,7 +19,7 @@ export default function AttackSimulation({ encryptedPackage, securityDecision, d
     setIsdLogs([]);
     setRecoveredText('');
 
-    const currentAlgo = securityDecision?.algorithms || encryptedPackage?.algorithm || 'HQC-256 + SLH-DSA-128s';
+    const currentAlgo = securityDecision?.algorithms || encryptedPackage?.algorithm || 'ML-KEM-1024 + SLH-DSA-128s';
     const { kemLabel } = parseAlgorithmString(currentAlgo);
     const secBits = NIST_SECURITY_BITS[kemLabel] || 256;
 
@@ -74,7 +74,7 @@ export default function AttackSimulation({ encryptedPackage, securityDecision, d
     setTamperState('running');
     setTamperLogs([]);
 
-    const currentAlgo = securityDecision?.algorithms || encryptedPackage?.algorithm || 'HQC-256 + SLH-DSA-128s';
+    const currentAlgo = securityDecision?.algorithms || encryptedPackage?.algorithm || 'ML-KEM-1024 + SLH-DSA-128s';
     const { sigAlgo, sigLabel } = parseAlgorithmString(currentAlgo);
     const origLabel = classification?.label || 'PII (CONFIDENTIAL)';
 

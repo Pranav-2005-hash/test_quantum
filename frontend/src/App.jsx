@@ -22,11 +22,11 @@ export default function App() {
   const [pipelineStatus, setPipelineStatus] = useState('idle'); // idle, running, completed
   const [pipelineLogs, setPipelineLogs] = useState([]);
   const [auditLogs, setAuditLogs] = useState([
-    { id: 1, timestamp: new Date(Date.now() - 3600000).toISOString(), filename: 'invoice_march.pdf', classification: 'FINANCIAL', securityLevel: 'HIGH', algorithm: 'HQC-256 + SLH-DSA-128s', signature: '7k2p9x4m1q8...', status: 'SUCCESS' },
-    { id: 2, timestamp: new Date(Date.now() - 7200000).toISOString(), filename: 'employee_data.csv', classification: 'PII', securityLevel: 'MAXIMUM', algorithm: 'HQC-256 + Classic McEliece', signature: 'a4b8c2d9e1f...', status: 'SUCCESS' },
-    { id: 3, timestamp: new Date(Date.now() - 10800000).toISOString(), filename: 'product_announcement.docx', classification: 'PUBLIC', securityLevel: 'HIGH', algorithm: 'HQC-256 + SLH-DSA-128s', signature: 'c1d2e3f4g5h...', status: 'SUCCESS' },
-    { id: 4, timestamp: new Date(Date.now() - 14400000).toISOString(), filename: 'q3_revenue.xlsx', classification: 'FINANCIAL', securityLevel: 'VERY HIGH', algorithm: 'HQC-256 + SLH-DSA-256s', signature: 'f5g6h7i8j9k...', status: 'SUCCESS' },
-    { id: 5, timestamp: new Date(Date.now() - 18000000).toISOString(), filename: 'passport_scan.jpg', classification: 'PII', securityLevel: 'MAXIMUM', algorithm: 'HQC-256 + Classic McEliece', signature: 'k9j8i7h6g5f...', status: 'SUCCESS' }
+    { id: 1, timestamp: new Date(Date.now() - 3600000).toISOString(), filename: 'invoice_march.pdf', classification: 'FINANCIAL', securityLevel: 'HIGH', algorithm: 'ML-KEM-1024 + SLH-DSA-128s', signature: '7k2p9x4m1q8...', status: 'SUCCESS' },
+    { id: 2, timestamp: new Date(Date.now() - 7200000).toISOString(), filename: 'employee_data.csv', classification: 'PII', securityLevel: 'MAXIMUM', algorithm: 'ML-KEM-1024 + SLH-DSA-256s', signature: 'a4b8c2d9e1f...', status: 'SUCCESS' },
+    { id: 3, timestamp: new Date(Date.now() - 10800000).toISOString(), filename: 'product_announcement.docx', classification: 'PUBLIC', securityLevel: 'HIGH', algorithm: 'ML-KEM-1024 + SLH-DSA-128s', signature: 'c1d2e3f4g5h...', status: 'SUCCESS' },
+    { id: 4, timestamp: new Date(Date.now() - 14400000).toISOString(), filename: 'q3_revenue.xlsx', classification: 'FINANCIAL', securityLevel: 'VERY HIGH', algorithm: 'ML-KEM-1024 + SLH-DSA-256s', signature: 'f5g6h7i8j9k...', status: 'SUCCESS' },
+    { id: 5, timestamp: new Date(Date.now() - 18000000).toISOString(), filename: 'passport_scan.jpg', classification: 'PII', securityLevel: 'MAXIMUM', algorithm: 'ML-KEM-1024 + SLH-DSA-256s', signature: 'k9j8i7h6g5f...', status: 'SUCCESS' }
   ]);
   const [encryptedPackage, setEncryptedPackage] = useState(null);
 
@@ -86,37 +86,37 @@ export default function App() {
     // Scenario A: High Risk + High Sensitivity
     if (docSensitivity >= 2 && isPublicWifi) {
         // Force Maximum Security. Security > Battery.
-        return { level: 'MAXIMUM (HIGH RISK ENVIRONMENT)', algorithms: 'HQC-256 + Classic McEliece' };
+        return { level: 'MAXIMUM (HIGH RISK ENVIRONMENT)', algorithms: 'ML-KEM-1024 + SLH-DSA-256s' };
     }
 
     // Scenario B: Critical Battery
     if (isCriticalBattery) {
         if (docSensitivity >= 2) {
             // Compromise: Sensitive doc, dying battery. Fast signatures, strong encryption.
-            return { level: 'HIGH (BATTERY SAVER)', algorithms: 'HQC-192 + SLH-DSA-128f' };
+            return { level: 'HIGH (BATTERY SAVER)', algorithms: 'ML-KEM-768 + SLH-DSA-128f' };
         }
         // Public doc, dying battery: Use lowest overhead PQC
-        return { level: 'LOW (CRITICAL BATTERY)', algorithms: 'HQC-128 + SLH-DSA-128f' };
+        return { level: 'LOW (CRITICAL BATTERY)', algorithms: 'ML-KEM-512 + SLH-DSA-128f' };
     }
 
     // Scenario C: Unrestricted Power + Sensitive
     if (isInfinitePower && docSensitivity >= 2) {
-        return { level: 'MAXIMUM (UNRESTRICTED POWER)', algorithms: 'HQC-256 + SLH-DSA-256s' };
+        return { level: 'MAXIMUM (UNRESTRICTED POWER)', algorithms: 'ML-KEM-1024 + SLH-DSA-256s' };
     }
 
     // Scenario D: Public WiFi + Non-Sensitive
     if (isPublicWifi && docSensitivity < 2) {
         // Even public docs need decent protection on untrusted networks
-        return { level: 'VERY HIGH (UNTRUSTED NET)', algorithms: 'HQC-192 + SLH-DSA-256f' };
+        return { level: 'VERY HIGH (UNTRUSTED NET)', algorithms: 'ML-KEM-768 + SLH-DSA-256f' };
     }
 
     // Scenario E: Moderate Battery + Moderate Sensitivity
     if (isLowBattery && docSensitivity > 0) {
-        return { level: 'MEDIUM (BALANCED)', algorithms: 'HQC-192 + SLH-DSA-128s' };
+        return { level: 'MEDIUM (BALANCED)', algorithms: 'ML-KEM-768 + SLH-DSA-128s' };
     }
 
     // Scenario F: Default Safe State (Enterprise Net, Decent Battery)
-    return { level: 'HIGH (STANDARD)', algorithms: 'HQC-256 + SLH-DSA-128s' };
+    return { level: 'HIGH (STANDARD)', algorithms: 'ML-KEM-1024 + SLH-DSA-128s' };
   };
 
   const securityDecision = getSecurityDecision();
